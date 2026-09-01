@@ -3,6 +3,7 @@ local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 
 local localPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -41,13 +42,62 @@ local function isCustomModel(model)
     if not model or model == localPlayer.Character then return false end
     if model:IsA("Tool") then return false end
     if Players:GetPlayerFromCharacter(model) then return true end
-    if model:FindFirstChild("Humanoid") then return true end
-    if model:FindFirstChild("Head") then return true end
-    if model:FindFirstChild("AnimationController") then return true end
-    local name = model.Name:lower()
-    if string.find(name, "character") or string.find(name, "player") or string.find(name, "bot") then
+
+    local function isDecoration(model)
+        local name = model.Name:lower()
+        local forbidden = {"door", "window", "wall", "floor", "ceiling", "prop", "decoration", "furniture", "stairs", "railing", "pipe", "vent", "crate", "barrel", "container"}
+        for _, word in ipairs(forbidden) do
+            if string.find(name, word) then
+                return true
+            end
+        end
+        local parent = model.Parent
+        while parent do
+            local pname = parent.Name:lower()
+            for _, word in ipairs(forbidden) do
+                if string.find(pname, word) then
+                    return true
+                end
+            end
+            parent = parent.Parent
+        end
+        if string.find(model:GetFullName():lower(), "activemap") or string.find(model:GetFullName():lower(), "map") or string.find(model:GetFullName():lower(), "decor") then
+            return true
+        end
+        return false
+    end
+
+    if isDecoration(model) then
+        return false
+    end
+
+    if model:FindFirstChild("Humanoid") then
         return true
     end
+
+    local hasHead = model:FindFirstChild("Head") ~= nil
+    local hasAnim = model:FindFirstChild("AnimationController") ~= nil
+    local hasRoot = model:FindFirstChild("HumanoidRootPart") ~= nil or model.PrimaryPart ~= nil
+
+    local partCount = 0
+    for _, child in ipairs(model:GetDescendants()) do
+        if child:IsA("BasePart") then
+            partCount = partCount + 1
+            if partCount > 3 then break end
+        end
+    end
+
+    if (hasHead or hasAnim) and (hasRoot or partCount > 3) then
+        return true
+    end
+
+    local name = model.Name:lower()
+    if string.find(name, "character") or string.find(name, "player") or string.find(name, "bot") then
+        if hasRoot or partCount > 3 then
+            return true
+        end
+    end
+
     return false
 end
 
@@ -440,17 +490,25 @@ screenGui.Name = "MEDW_Menu"
 screenGui.Parent = CoreGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 200, 0, 340)
-mainFrame.Position = UDim2.new(1, -215, 0, 20)
-mainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-mainFrame.BackgroundTransparency = 0.05
-mainFrame.BorderSizePixel = 1
-mainFrame.BorderColor3 = Color3.fromRGB(60, 60, 70)
+mainFrame.Size = UDim2.new(0, 210, 0, 355)
+mainFrame.Position = UDim2.new(1, -225, 0, 20)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+mainFrame.BackgroundTransparency = 0.08
+mainFrame.BorderSizePixel = 0
 mainFrame.ClipsDescendants = true
 mainFrame.Active = true
 mainFrame.Draggable = true
 mainFrame.Parent = screenGui
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+local shadow = Instance.new("ImageLabel")
+shadow.Size = UDim2.new(1, 20, 1, 20)
+shadow.Position = UDim2.new(-0.05, 0, -0.05, 0)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://1316045217"
+shadow.ImageColor3 = Color3.new(0,0,0)
+shadow.ImageTransparency = 0.6
+shadow.Parent = mainFrame
 
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, 0, 1, 0)
@@ -459,32 +517,32 @@ content.BackgroundTransparency = 1
 content.Parent = mainFrame
 
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 32)
+header.Size = UDim2.new(1, 0, 0, 36)
 header.Position = UDim2.new(0, 0, 0, 0)
 header.BackgroundTransparency = 1
 header.Parent = content
 
 local logo = Instance.new("TextLabel")
-logo.Size = UDim2.new(0.6, 0, 1, 0)
-logo.Position = UDim2.new(0.2, 0, 0, 0)
+logo.Size = UDim2.new(0.7, 0, 1, 0)
+logo.Position = UDim2.new(0.15, 0, 0, 0)
 logo.BackgroundTransparency = 1
 logo.Text = "MEDW"
-logo.TextColor3 = Color3.fromRGB(230, 230, 230)
+logo.TextColor3 = Color3.fromRGB(235, 235, 240)
 logo.Font = Enum.Font.GothamBold
-logo.TextSize = 18
+logo.TextSize = 20
 logo.TextXAlignment = Enum.TextXAlignment.Center
 logo.TextYAlignment = Enum.TextYAlignment.Center
 logo.Parent = header
 
 local collapseBtn = Instance.new("TextButton")
-collapseBtn.Size = UDim2.new(0, 28, 0, 28)
-collapseBtn.Position = UDim2.new(1, -36, 0, 2)
-collapseBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+collapseBtn.Size = UDim2.new(0, 30, 0, 30)
+collapseBtn.Position = UDim2.new(1, -40, 0, 3)
+collapseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
 collapseBtn.BorderSizePixel = 0
 collapseBtn.Text = "−"
 collapseBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
 collapseBtn.Font = Enum.Font.GothamBold
-collapseBtn.TextSize = 22
+collapseBtn.TextSize = 24
 collapseBtn.TextXAlignment = Enum.TextXAlignment.Center
 collapseBtn.TextYAlignment = Enum.TextYAlignment.Center
 collapseBtn.Parent = header
@@ -492,14 +550,14 @@ Instance.new("UICorner", collapseBtn).CornerRadius = UDim.new(1, 0)
 
 local sep1 = Instance.new("Frame")
 sep1.Size = UDim2.new(0.92, 0, 0, 1)
-sep1.Position = UDim2.new(0.04, 0, 0, 34)
-sep1.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+sep1.Position = UDim2.new(0.04, 0, 0, 38)
+sep1.BackgroundColor3 = Color3.fromRGB(65, 65, 75)
 sep1.BorderSizePixel = 0
 sep1.Parent = content
 
 local function createToggle(label, yPos, callback, initial)
     local line = Instance.new("Frame")
-    line.Size = UDim2.new(0.92, 0, 0, 22)
+    line.Size = UDim2.new(0.92, 0, 0, 24)
     line.Position = UDim2.new(0.04, 0, 0, yPos)
     line.BackgroundTransparency = 1
     line.Parent = content
@@ -509,9 +567,9 @@ local function createToggle(label, yPos, callback, initial)
     lbl.Position = UDim2.new(0, 0, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
-    lbl.TextColor3 = Color3.fromRGB(200, 200, 210)
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(205, 205, 215)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 13
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Center
     lbl.Parent = line
@@ -519,39 +577,38 @@ local function createToggle(label, yPos, callback, initial)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0.25, 0, 1, 0)
     btn.Position = UDim2.new(0.72, 0, 0, 0)
-    btn.BackgroundColor3 = initial and Color3.fromRGB(0, 130, 0) or Color3.fromRGB(55, 55, 60)
-    btn.BorderSizePixel = 1
-    btn.BorderColor3 = Color3.fromRGB(40, 40, 45)
+    btn.BackgroundColor3 = initial and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
+    btn.BorderSizePixel = 0
     btn.Text = initial and "ON" or "OFF"
     btn.TextColor3 = Color3.new(1,1,1)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 10
+    btn.TextSize = 11
     btn.TextXAlignment = Enum.TextXAlignment.Center
     btn.TextYAlignment = Enum.TextYAlignment.Center
     btn.Parent = line
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
 
     local state = initial
     btn.MouseButton1Click:Connect(function()
         state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(0, 130, 0) or Color3.fromRGB(55, 55, 60)
+        btn.BackgroundColor3 = state and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
         btn.Text = state and "ON" or "OFF"
         callback(state)
     end)
     return btn
 end
 
-local espPlayerBtn = createToggle("Player ESP", 42, function(v) espPlayersEnabled = v refreshESP() end, espPlayersEnabled)
-local espBotBtn = createToggle("Bot ESP", 66, function(v) espBotsEnabled = v refreshESP() end, espBotsEnabled)
-local espModelBtn = createToggle("Model ESP", 90, function(v) espModelEnabled = v refreshESP(); if botAimEnabled then rebuildAllTargets() end end, espModelEnabled)
-local aimlockBtn = createToggle("Aimlock", 114, function(v) aimbotEnabled = v end, aimbotEnabled)
-local headPlayerBtn = createToggle("Head Aim (P)", 138, function(v) headAimPlayers = v; rebuildPlayerTargets(); currentTarget = nil end, headAimPlayers)
-local botAimBtnToggle = createToggle("Bot Aim", 162, function(v) botAimEnabled = v; if v then rebuildAllTargets() else cachedBotTargets = {}; cachedCustomTargets = {} end; currentTarget = nil end, botAimEnabled)
-local headBotBtn = createToggle("Head Aim (B)", 186, function(v) headAimBots = v; if botAimEnabled then rebuildAllTargets() end; currentTarget = nil end, headAimBots)
+local espPlayerBtn = createToggle("Player ESP", 46, function(v) espPlayersEnabled = v refreshESP() end, espPlayersEnabled)
+local espBotBtn = createToggle("Bot ESP", 72, function(v) espBotsEnabled = v refreshESP() end, espBotsEnabled)
+local espModelBtn = createToggle("Model ESP", 98, function(v) espModelEnabled = v refreshESP(); if botAimEnabled then rebuildAllTargets() end end, espModelEnabled)
+local aimlockBtn = createToggle("Aimlock", 124, function(v) aimbotEnabled = v end, aimbotEnabled)
+local headPlayerBtn = createToggle("Head Aim (P)", 150, function(v) headAimPlayers = v; rebuildPlayerTargets(); currentTarget = nil end, headAimPlayers)
+local botAimBtnToggle = createToggle("Bot Aim", 176, function(v) botAimEnabled = v; if v then rebuildAllTargets() else cachedBotTargets = {}; cachedCustomTargets = {} end; currentTarget = nil end, botAimEnabled)
+local headBotBtn = createToggle("Head Aim (B)", 202, function(v) headAimBots = v; if botAimEnabled then rebuildAllTargets() end; currentTarget = nil end, headAimBots)
 
 local predLine = Instance.new("Frame")
-predLine.Size = UDim2.new(0.92, 0, 0, 20)
-predLine.Position = UDim2.new(0.04, 0, 0, 212)
+predLine.Size = UDim2.new(0.92, 0, 0, 22)
+predLine.Position = UDim2.new(0.04, 0, 0, 230)
 predLine.BackgroundTransparency = 1
 predLine.Parent = content
 
@@ -560,9 +617,9 @@ predLbl.Size = UDim2.new(0.6, 0, 1, 0)
 predLbl.Position = UDim2.new(0, 0, 0, 0)
 predLbl.BackgroundTransparency = 1
 predLbl.Text = "Predict"
-predLbl.TextColor3 = Color3.fromRGB(200, 200, 210)
-predLbl.Font = Enum.Font.GothamBold
-predLbl.TextSize = 12
+predLbl.TextColor3 = Color3.fromRGB(205, 205, 215)
+predLbl.Font = Enum.Font.GothamMedium
+predLbl.TextSize = 13
 predLbl.TextXAlignment = Enum.TextXAlignment.Left
 predLbl.TextYAlignment = Enum.TextYAlignment.Center
 predLbl.Parent = predLine
@@ -570,24 +627,23 @@ predLbl.Parent = predLine
 local predBtn = Instance.new("TextButton")
 predBtn.Size = UDim2.new(0.2, 0, 1, 0)
 predBtn.Position = UDim2.new(0.75, 0, 0, 0)
-predBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 0)
-predBtn.BorderSizePixel = 1
-predBtn.BorderColor3 = Color3.fromRGB(40, 40, 45)
+predBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 0)
+predBtn.BorderSizePixel = 0
 predBtn.Text = "ON"
 predBtn.TextColor3 = Color3.new(1,1,1)
 predBtn.Font = Enum.Font.GothamBold
-predBtn.TextSize = 10
+predBtn.TextSize = 11
 predBtn.Parent = predLine
-Instance.new("UICorner", predBtn).CornerRadius = UDim.new(0, 4)
+Instance.new("UICorner", predBtn).CornerRadius = UDim.new(0, 5)
 predBtn.MouseButton1Click:Connect(function()
     predictEnabled = not predictEnabled
-    predBtn.BackgroundColor3 = predictEnabled and Color3.fromRGB(0, 130, 0) or Color3.fromRGB(55, 55, 60)
+    predBtn.BackgroundColor3 = predictEnabled and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
     predBtn.Text = predictEnabled and "ON" or "OFF"
 end)
 
 local function createSlider(label, yPos, minVal, maxVal, initial, callback)
     local line = Instance.new("Frame")
-    line.Size = UDim2.new(0.92, 0, 0, 22)
+    line.Size = UDim2.new(0.92, 0, 0, 24)
     line.Position = UDim2.new(0.04, 0, 0, yPos)
     line.BackgroundTransparency = 1
     line.Parent = content
@@ -597,9 +653,9 @@ local function createSlider(label, yPos, minVal, maxVal, initial, callback)
     lbl.Position = UDim2.new(0, 0, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
-    lbl.TextColor3 = Color3.fromRGB(180, 180, 190)
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 11
+    lbl.TextColor3 = Color3.fromRGB(190, 190, 200)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 12
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Center
     lbl.Parent = line
@@ -607,22 +663,22 @@ local function createSlider(label, yPos, minVal, maxVal, initial, callback)
     local slider = Instance.new("Frame")
     slider.Size = UDim2.new(0.55, 0, 0.7, 0)
     slider.Position = UDim2.new(0.38, 0, 0.15, 0)
-    slider.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+    slider.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
     slider.BorderSizePixel = 0
     slider.Parent = line
-    Instance.new("UICorner", slider).CornerRadius = UDim.new(0, 3)
+    Instance.new("UICorner", slider).CornerRadius = UDim.new(0, 4)
 
     local fill = Instance.new("Frame")
     fill.Size = UDim2.new((initial - minVal) / (maxVal - minVal), 0, 1, 0)
     fill.BackgroundColor3 = currentColor
     fill.BorderSizePixel = 0
     fill.Parent = slider
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
 
     local knob = Instance.new("TextButton")
-    knob.Size = UDim2.new(0, 10, 0, 10)
-    knob.Position = UDim2.new((initial - minVal) / (maxVal - minVal), -5, 0.5, -5)
-    knob.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+    knob.Size = UDim2.new(0, 12, 0, 12)
+    knob.Position = UDim2.new((initial - minVal) / (maxVal - minVal), -6, 0.5, -6)
+    knob.BackgroundColor3 = Color3.fromRGB(235, 235, 240)
     knob.BorderSizePixel = 0
     knob.Text = ""
     knob.Parent = slider
@@ -635,7 +691,7 @@ local function createSlider(label, yPos, minVal, maxVal, initial, callback)
         local val = math.clamp(relX / w, 0, 1) * (maxVal - minVal) + minVal
         val = math.round(val * 100) / 100
         fill.Size = UDim2.new((val - minVal) / (maxVal - minVal), 0, 1, 0)
-        knob.Position = UDim2.new((val - minVal) / (maxVal - minVal), -5, 0.5, -5)
+        knob.Position = UDim2.new((val - minVal) / (maxVal - minVal), -6, 0.5, -6)
         callback(val)
     end
 
@@ -662,35 +718,35 @@ local function createSlider(label, yPos, minVal, maxVal, initial, callback)
     return fill, knob
 end
 
-local _, _ = createSlider("Fill", 238, 0, 1, fillTransparency, function(v)
+local _, _ = createSlider("Fill", 258, 0, 1, fillTransparency, function(v)
     fillTransparency = v
     updateAllColors()
 end)
 
-local _, _ = createSlider("Outline", 262, 0, 1, outlineTransparency, function(v)
+local _, _ = createSlider("Outline", 284, 0, 1, outlineTransparency, function(v)
     outlineTransparency = v
     updateAllColors()
 end)
 
-local _, _ = createSlider("Smooth", 286, 0.05, 0.95, smoothing, function(v)
+local _, _ = createSlider("Smooth", 310, 0.05, 0.95, smoothing, function(v)
     smoothing = v
 end)
 
 local distLabel = Instance.new("TextLabel")
-distLabel.Size = UDim2.new(0.4, 0, 0, 16)
-distLabel.Position = UDim2.new(0.04, 0, 0, 314)
+distLabel.Size = UDim2.new(0.4, 0, 0, 18)
+distLabel.Position = UDim2.new(0.04, 0, 0, 332)
 distLabel.BackgroundTransparency = 1
 distLabel.Text = "Dist: N/A"
-distLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+distLabel.TextColor3 = Color3.fromRGB(170, 170, 180)
 distLabel.Font = Enum.Font.GothamBold
-distLabel.TextSize = 11
+distLabel.TextSize = 12
 distLabel.TextXAlignment = Enum.TextXAlignment.Left
 distLabel.Parent = content
 
 local colorSlider = Instance.new("Frame")
 colorSlider.Size = UDim2.new(0.5, 0, 0, 14)
-colorSlider.Position = UDim2.new(0.45, 0, 0, 315)
-colorSlider.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+colorSlider.Position = UDim2.new(0.45, 0, 0, 334)
+colorSlider.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
 colorSlider.BorderSizePixel = 0
 colorSlider.Parent = content
 Instance.new("UICorner", colorSlider).CornerRadius = UDim.new(0, 4)
@@ -703,9 +759,9 @@ colorFill.Parent = colorSlider
 Instance.new("UICorner", colorFill).CornerRadius = UDim.new(0, 4)
 
 local colorKnob = Instance.new("TextButton")
-colorKnob.Size = UDim2.new(0, 10, 0, 10)
-colorKnob.Position = UDim2.new(0, -5, 0.5, -5)
-colorKnob.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+colorKnob.Size = UDim2.new(0, 12, 0, 12)
+colorKnob.Position = UDim2.new(0, -6, 0.5, -6)
+colorKnob.BackgroundColor3 = Color3.fromRGB(235, 235, 240)
 colorKnob.BorderSizePixel = 0
 colorKnob.Text = ""
 colorKnob.Parent = colorSlider
@@ -716,7 +772,7 @@ local function updateColorSlider(value)
     currentColor = Color3.fromHSV(value,1,1)
     colorFill.BackgroundColor3 = currentColor
     colorFill.Size = UDim2.new(value,0,1,0)
-    colorKnob.Position = UDim2.new(value, -5, 0.5, -5)
+    colorKnob.Position = UDim2.new(value, -6, 0.5, -6)
     updateAllColors()
 end
 
@@ -764,26 +820,52 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- ===== Collapse (финальный, без смещений) =====
 local collapsed = false
-local originalSize = UDim2.new(0, 200, 0, 340)
+local originalSize = UDim2.new(0, 210, 0, 355)
 
 local collapseCircle = Instance.new("TextButton")
-collapseCircle.Size = UDim2.new(0, 36, 0, 36)
-collapseCircle.Position = UDim2.new(1, -51, 0, 22)
-collapseCircle.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-collapseCircle.BackgroundTransparency = 0.05
+collapseCircle.Size = UDim2.new(0, 38, 0, 38)
+collapseCircle.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+collapseCircle.BackgroundTransparency = 0
 collapseCircle.BorderSizePixel = 1
-collapseCircle.BorderColor3 = Color3.fromRGB(60, 60, 70)
+collapseCircle.BorderColor3 = Color3.fromRGB(70, 70, 80)
 collapseCircle.Visible = false
 collapseCircle.Text = "−"
-collapseCircle.TextColor3 = Color3.fromRGB(220, 220, 220)
+collapseCircle.TextColor3 = Color3.fromRGB(255, 255, 255)
 collapseCircle.Font = Enum.Font.GothamBold
-collapseCircle.TextSize = 28
+collapseCircle.TextSize = 30
 collapseCircle.TextXAlignment = Enum.TextXAlignment.Center
 collapseCircle.TextYAlignment = Enum.TextYAlignment.Center
 collapseCircle.ZIndex = 10
 collapseCircle.Parent = screenGui
 Instance.new("UICorner", collapseCircle).CornerRadius = UDim.new(1, 0)
+
+local shadowCircle = Instance.new("ImageLabel")
+shadowCircle.Size = UDim2.new(1, 10, 1, 10)
+shadowCircle.Position = UDim2.new(-0.05, 0, -0.05, 0)
+shadowCircle.BackgroundTransparency = 1
+shadowCircle.Image = "rbxassetid://1316045217"
+shadowCircle.ImageColor3 = Color3.new(0,0,0)
+shadowCircle.ImageTransparency = 0.5
+shadowCircle.ZIndex = 9
+shadowCircle.Parent = collapseCircle
+
+local function setCircleToButtonPosition()
+    local btnPos = collapseBtn.AbsolutePosition
+    if btnPos.X > 0 and btnPos.Y > 0 then
+        local offsetX = (38 - 30) / 2
+        local offsetY = (38 - 30) / 2
+        collapseCircle.Position = UDim2.new(0, btnPos.X - offsetX, 0, btnPos.Y - offsetY)
+    end
+end
+
+collapseBtn.MouseButton1Click:Connect(function()
+    collapsed = true
+    setCircleToButtonPosition()
+    collapseCircle.Visible = true
+    mainFrame.Visible = false
+end)
 
 collapseCircle.MouseButton1Click:Connect(function()
     collapsed = false
@@ -792,18 +874,9 @@ collapseCircle.MouseButton1Click:Connect(function()
     mainFrame.Size = originalSize
 end)
 
-collapseBtn.MouseButton1Click:Connect(function()
-    collapsed = true
-    mainFrame.Visible = false
-    local btnPos = collapseBtn.AbsolutePosition
-    collapseCircle.Position = UDim2.new(0, btnPos.X, 0, btnPos.Y)
-    collapseCircle.Visible = true
-end)
-
 mainFrame:GetPropertyChangedSignal("Position"):Connect(function()
     if collapseCircle.Visible then
-        local btnPos = collapseBtn.AbsolutePosition
-        collapseCircle.Position = UDim2.new(0, btnPos.X, 0, btnPos.Y)
+        setCircleToButtonPosition()
     end
 end)
 
