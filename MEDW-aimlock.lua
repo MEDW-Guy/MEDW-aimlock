@@ -1,9 +1,9 @@
+-- MEDW: ESP + Aimlock (Heavily Optimized)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
-local TweenService = game:GetService("TweenService")
 
 local localPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -28,11 +28,71 @@ local predictEnabled = true
 
 local activeESP = {}
 local pending = {}
-local scanning = false
+
+-- ===== Оптимизация: очередь обработки =====
+local scanQueue = {}
+local scanQueued = {}
+local processingQueue = false
+
+local function enqueue(obj)
+    if scanQueued[obj] then return end
+    scanQueued[obj] = true
+    scanQueue[#scanQueue + 1] = obj
+    if processingQueue then return end
+    processingQueue = true
+    task.spawn(function()
+        while #scanQueue > 0 do
+            local n = #scanQueue
+            local batch = n > 40 and 40 or n
+            for i = 1, batch do
+                local o = scanQueue[i]
+                scanQueued[o] = nil
+                if o and o.Parent then
+                    processModel(o)
+                end
+            end
+            for i = 1, batch do scanQueue[i] = nil end
+            if #scanQueue > 0 then
+                RunService.Heartbeat:Wait()
+            end
+        end
+        processingQueue = false
+    end)
+end
+
+-- ===== Фильтры (быстрые) =====
+local decorationKeywords = {
+    door=true, window=true, wall=true, floor=true, ceiling=true, prop=true,
+    decoration=true, furniture=true, stairs=true, railing=true, pipe=true,
+    vent=true, crate=true, barrel=true, container=true
+}
+
+local function hasForbiddenName(name)
+    name = name:lower()
+    for w in pairs(decorationKeywords) do
+        if string.find(name, w, 1, true) then return true end
+    end
+    return false
+end
+
+local function isDecoration(model)
+    if hasForbiddenName(model.Name) then return true end
+    local p = model.Parent
+    local depth = 0
+    while p and depth < 4 do
+        local n = p.Name
+        if n == "activemap" or n == "map" or n == "decor" or n == "decorations" then
+            return true
+        end
+        if hasForbiddenName(n) then return true end
+        p = p.Parent
+        depth = depth + 1
+    end
+    return false
+end
 
 local function isStandardBot(model)
     if not model or model == localPlayer.Character then return false end
-    if model:IsA("Tool") then return false end
     if not model:FindFirstChild("HumanoidRootPart") then return false end
     if Players:GetPlayerFromCharacter(model) then return false end
     return true
@@ -40,64 +100,19 @@ end
 
 local function isCustomModel(model)
     if not model or model == localPlayer.Character then return false end
-    if model:IsA("Tool") then return false end
     if Players:GetPlayerFromCharacter(model) then return true end
-
-    local function isDecoration(model)
-        local name = model.Name:lower()
-        local forbidden = {"door", "window", "wall", "floor", "ceiling", "prop", "decoration", "furniture", "stairs", "railing", "pipe", "vent", "crate", "barrel", "container"}
-        for _, word in ipairs(forbidden) do
-            if string.find(name, word) then
-                return true
-            end
-        end
-        local parent = model.Parent
-        while parent do
-            local pname = parent.Name:lower()
-            for _, word in ipairs(forbidden) do
-                if string.find(pname, word) then
-                    return true
-                end
-            end
-            parent = parent.Parent
-        end
-        if string.find(model:GetFullName():lower(), "activemap") or string.find(model:GetFullName():lower(), "map") or string.find(model:GetFullName():lower(), "decor") then
-            return true
-        end
-        return false
-    end
-
-    if isDecoration(model) then
-        return false
-    end
-
-    if model:FindFirstChild("Humanoid") then
-        return true
-    end
-
+    if isDecoration(model) then return false end
+    if model:FindFirstChild("Humanoid") then return true end
     local hasHead = model:FindFirstChild("Head") ~= nil
     local hasAnim = model:FindFirstChild("AnimationController") ~= nil
-    local hasRoot = model:FindFirstChild("HumanoidRootPart") ~= nil or model.PrimaryPart ~= nil
-
-    local partCount = 0
-    for _, child in ipairs(model:GetDescendants()) do
-        if child:IsA("BasePart") then
-            partCount = partCount + 1
-            if partCount > 3 then break end
-        end
-    end
-
-    if (hasHead or hasAnim) and (hasRoot or partCount > 3) then
+    if (hasHead or hasAnim) and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart) then
         return true
     end
-
     local name = model.Name:lower()
-    if string.find(name, "character") or string.find(name, "player") or string.find(name, "bot") then
-        if hasRoot or partCount > 3 then
-            return true
-        end
+    if (string.find(name, "character", 1, true) or string.find(name, "player", 1, true) or string.find(name, "bot", 1, true))
+        and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart) then
+        return true
     end
-
     return false
 end
 
@@ -110,54 +125,54 @@ local function getTargetType(model)
     return nil
 end
 
-local function getName(model, targetType, ref)
-    if targetType == "player" and ref then return ref.Name end
-    if targetType == "bot" and ref then return ref.Name or "Bot" end
-    if targetType == "custom" and ref then return ref.Name or "Model" end
+local function getName(model, tType, ref)
+    if tType == "player" and ref then return ref.Name end
+    if tType == "bot" and ref then return ref.Name or "Bot" end
+    if tType == "custom" and ref then return ref.Name or "Model" end
     return model.Name or "?"
 end
 
 local function getBillboardPart(model)
     local part = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
     if part then return part end
-    for _, child in ipairs(model:GetChildren()) do
-        if child:IsA("BasePart") then return child end
+    for _, c in ipairs(model:GetChildren()) do
+        if c:IsA("BasePart") then return c end
     end
     return nil
 end
 
-local function addESP(model, targetType, ref)
+local function addESP(model, tType, ref)
     if pending[model] or activeESP[model] then return end
     pending[model] = true
     task.spawn(function()
-        local name = getName(model, targetType, ref)
-        local highlight = Instance.new("Highlight")
-        highlight.FillColor = currentColor
-        highlight.OutlineColor = Color3.new(1,1,1)
-        highlight.FillTransparency = fillTransparency
-        highlight.OutlineTransparency = outlineTransparency
-        highlight.Adornee = model
-        highlight.Parent = model
-        local billboard = nil
+        local name = getName(model, tType, ref)
+        local hl = Instance.new("Highlight")
+        hl.FillColor = currentColor
+        hl.OutlineColor = Color3.new(1,1,1)
+        hl.FillTransparency = fillTransparency
+        hl.OutlineTransparency = outlineTransparency
+        hl.Adornee = model
+        hl.Parent = model
+        local bb = nil
         local part = getBillboardPart(model)
         if part then
-            billboard = Instance.new("BillboardGui")
-            billboard.Size = UDim2.new(0,200,0,50)
-            billboard.StudsOffset = Vector3.new(0,3,0)
-            billboard.AlwaysOnTop = true
-            billboard.Parent = part
-            local textLabel = Instance.new("TextLabel")
-            textLabel.Size = UDim2.new(1,0,1,0)
-            textLabel.BackgroundTransparency = 1
-            textLabel.Text = name
-            textLabel.TextColor3 = Color3.new(1,1,1)
-            textLabel.TextScaled = false
-            textLabel.TextSize = 10
-            textLabel.Font = Enum.Font.GothamBold
-            textLabel.TextStrokeTransparency = 0.5
-            textLabel.Parent = billboard
+            bb = Instance.new("BillboardGui")
+            bb.Size = UDim2.new(0,200,0,50)
+            bb.StudsOffset = Vector3.new(0,3,0)
+            bb.AlwaysOnTop = true
+            bb.Parent = part
+            local tl = Instance.new("TextLabel")
+            tl.Size = UDim2.new(1,0,1,0)
+            tl.BackgroundTransparency = 1
+            tl.Text = name
+            tl.TextColor3 = Color3.new(1,1,1)
+            tl.TextScaled = false
+            tl.TextSize = 10
+            tl.Font = Enum.Font.GothamBold
+            tl.TextStrokeTransparency = 0.5
+            tl.Parent = bb
         end
-        activeESP[model] = {highlight, billboard}
+        activeESP[model] = {hl, bb}
         pending[model] = nil
     end)
 end
@@ -177,7 +192,7 @@ local function clearAllESP()
 end
 
 local function updateAllColors()
-    for model, data in pairs(activeESP) do
+    for _, data in pairs(activeESP) do
         if data and data[1] then
             data[1].FillColor = currentColor
             data[1].FillTransparency = fillTransparency
@@ -186,81 +201,102 @@ local function updateAllColors()
     end
 end
 
-local function processModel(model)
+function processModel(model)
     if not model or model == localPlayer.Character then return end
-    local targetType, ref = getTargetType(model)
-    if not targetType then
+    local tType, ref = getTargetType(model)
+    if not tType then
         if activeESP[model] then removeESP(model) end
         return
     end
     local enabled = false
-    if targetType == "player" and espPlayersEnabled then enabled = true
-    elseif targetType == "bot" and espBotsEnabled then enabled = true
-    elseif targetType == "custom" and espModelEnabled then enabled = true
+    if tType == "player" and espPlayersEnabled then enabled = true
+    elseif tType == "bot" and espBotsEnabled then enabled = true
+    elseif tType == "custom" and espModelEnabled then enabled = true
     end
     if not enabled then
         if activeESP[model] then removeESP(model) end
         return
     end
     if activeESP[model] then return end
-    addESP(model, targetType, ref)
+    addESP(model, tType, ref)
 end
+
+-- ===== Батчевое сканирование (без фризов) =====
+local fullScanning = false
 
 local function refreshESP()
     if not espPlayersEnabled and not espBotsEnabled and not espModelEnabled then
         clearAllESP()
         return
     end
-    if scanning then return end
-    scanning = true
+    if fullScanning then return end
+    fullScanning = true
+
     task.spawn(function()
+        -- 1. Игроки (мгновенно)
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= localPlayer and player.Character then
                 processModel(player.Character)
             end
         end
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("Model") then
-                processModel(obj)
-            elseif obj:IsA("Humanoid") then
-                local model = obj.Parent
-                if model and model:IsA("Model") then
-                    processModel(model)
+
+        -- 2. Workspace батчами
+        local list = Workspace:GetDescendants()
+        local total = #list
+        local batch = 60
+        local i = 1
+        while i <= total do
+            local stop = i + batch - 1
+            if stop > total then stop = total end
+            for j = i, stop do
+                local o = list[j]
+                if o:IsA("Model") then
+                    processModel(o)
+                elseif o:IsA("Humanoid") then
+                    local m = o.Parent
+                    if m and m:IsA("Model") then processModel(m) end
                 end
             end
+            i = stop + 1
+            if i <= total then
+                RunService.Heartbeat:Wait()
+            end
         end
-        scanning = false
+        fullScanning = false
     end)
 end
 
+-- ===== Отслеживание изменений (через очередь, не блокирует) =====
 local function startTrackingESP()
     Workspace.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            if obj:IsA("Model") then
-                processModel(obj)
-            elseif obj:IsA("Humanoid") then
-                local model = obj.Parent
-                if model and model:IsA("Model") then
-                    processModel(model)
+        if not (espPlayersEnabled or espBotsEnabled or espModelEnabled) then return end
+        if obj:IsA("Model") or obj:IsA("Humanoid") then
+            task.defer(function()
+                if obj:IsA("Model") then
+                    enqueue(obj)
+                else
+                    local m = obj.Parent
+                    if m and m:IsA("Model") then enqueue(m) end
                 end
-            end
-        end)
+            end)
+        end
     end)
     Workspace.DescendantRemoving:Connect(function(obj)
         if obj:IsA("Model") and activeESP[obj] then
             removeESP(obj)
         elseif obj:IsA("Humanoid") then
-            local model = obj.Parent
-            if model and model:IsA("Model") and activeESP[model] then
-                removeESP(model)
-            end
+            local m = obj.Parent
+            if m and m:IsA("Model") and activeESP[m] then removeESP(m) end
         end
     end)
 end
 
+-- ===== AIM (кэш целей, инкрементально) =====
 local cachedPlayerTargets = {}
 local cachedBotTargets = {}
 local cachedCustomTargets = {}
+local aimDirty = false
+local aimRebuilding = false
 
 local function rebuildPlayerTargets()
     local new = {}
@@ -274,7 +310,7 @@ local function rebuildPlayerTargets()
                     local head = char:FindFirstChild("Head")
                     if head then aimPart = head end
                 end
-                table.insert(new, { aimPart = aimPart, type = "player", ref = player, model = char })
+                new[#new+1] = { aimPart = aimPart, type = "player", ref = player, model = char }
             end
         end
     end
@@ -292,11 +328,9 @@ local function addStandardBot(model)
     local aimPart = root
     if headAimBots then
         local head = model:FindFirstChild("Head")
-        if head and head:IsA("BasePart") then
-            aimPart = head
-        end
+        if head and head:IsA("BasePart") then aimPart = head end
     end
-    table.insert(cachedBotTargets, { aimPart = aimPart, type = "bot", ref = model, model = model })
+    cachedBotTargets[#cachedBotTargets+1] = { aimPart = aimPart, type = "bot", ref = model, model = model }
 end
 
 local function removeStandardBot(model)
@@ -309,8 +343,7 @@ local function removeStandardBot(model)
 end
 
 local function addCustomModel(model)
-    if not botAimEnabled then return end
-    if not espModelEnabled then return end
+    if not botAimEnabled or not espModelEnabled then return end
     if not isCustomModel(model) then return end
     if Players:GetPlayerFromCharacter(model) then return end
     for _, t in ipairs(cachedCustomTargets) do
@@ -321,11 +354,9 @@ local function addCustomModel(model)
     local aimPart = root
     if headAimBots then
         local head = model:FindFirstChild("Head") or model:FindFirstChild("head")
-        if head and head:IsA("BasePart") then
-            aimPart = head
-        end
+        if head and head:IsA("BasePart") then aimPart = head end
     end
-    table.insert(cachedCustomTargets, { aimPart = aimPart, type = "custom", ref = model, model = model })
+    cachedCustomTargets[#cachedCustomTargets+1] = { aimPart = aimPart, type = "custom", ref = model, model = model }
 end
 
 local function removeCustomModel(model)
@@ -337,68 +368,91 @@ local function removeCustomModel(model)
     end
 end
 
+-- Полная перестройка AIM (батчами, не блокирует)
 local function rebuildAllTargets()
+    if aimRebuilding then return end
+    aimRebuilding = true
     task.spawn(function()
+        -- Игроки
+        rebuildPlayerTargets()
+
+        -- Боты
         local newBots = {}
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("Model") and isStandardBot(obj) then
-                local root = obj:FindFirstChild("HumanoidRootPart")
-                if root then
-                    local aimPart = root
-                    if headAimBots then
-                        local head = obj:FindFirstChild("Head")
-                        if head and head:IsA("BasePart") then
-                            aimPart = head
+        if botAimEnabled then
+            local list = Workspace:GetDescendants()
+            local batch = 80
+            for i = 1, #list, batch do
+                local stop = math.min(i + batch - 1, #list)
+                for j = i, stop do
+                    local o = list[j]
+                    if o:IsA("Model") and isStandardBot(o) then
+                        local root = o:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local aimPart = root
+                            if headAimBots then
+                                local head = o:FindFirstChild("Head")
+                                if head and head:IsA("BasePart") then aimPart = head end
+                            end
+                            newBots[#newBots+1] = { aimPart = aimPart, type = "bot", ref = o, model = o }
                         end
                     end
-                    table.insert(newBots, { aimPart = aimPart, type = "bot", ref = obj, model = obj })
                 end
+                RunService.Heartbeat:Wait()
             end
         end
         cachedBotTargets = newBots
-        if espModelEnabled then
-            local newCustom = {}
-            for _, obj in ipairs(Workspace:GetDescendants()) do
-                if obj:IsA("Model") and isCustomModel(obj) and not Players:GetPlayerFromCharacter(obj) then
-                    local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
-                    if root then
-                        local aimPart = root
-                        if headAimBots then
-                            local head = obj:FindFirstChild("Head") or obj:FindFirstChild("head")
-                            if head and head:IsA("BasePart") then
-                                aimPart = head
+
+        -- Кастомные модели
+        local newCustom = {}
+        if botAimEnabled and espModelEnabled then
+            local list = Workspace:GetDescendants()
+            local batch = 80
+            for i = 1, #list, batch do
+                local stop = math.min(i + batch - 1, #list)
+                for j = i, stop do
+                    local o = list[j]
+                    if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) and isCustomModel(o) then
+                        local root = o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
+                        if root then
+                            local aimPart = root
+                            if headAimBots then
+                                local head = o:FindFirstChild("Head") or o:FindFirstChild("head")
+                                if head and head:IsA("BasePart") then aimPart = head end
                             end
+                            newCustom[#newCustom+1] = { aimPart = aimPart, type = "custom", ref = o, model = o }
                         end
-                        table.insert(newCustom, { aimPart = aimPart, type = "custom", ref = obj, model = obj })
                     end
                 end
+                RunService.Heartbeat:Wait()
             end
-            cachedCustomTargets = newCustom
-        else
-            cachedCustomTargets = {}
         end
+        cachedCustomTargets = newCustom
+
+        aimRebuilding = false
+        aimDirty = false
     end)
 end
 
 local function setupAimTracking()
     rebuildPlayerTargets()
-    rebuildAllTargets()
     Players.PlayerAdded:Connect(rebuildPlayerTargets)
     Players.PlayerRemoving:Connect(rebuildPlayerTargets)
     for _, player in ipairs(Players:GetPlayers()) do
         player.CharacterAdded:Connect(rebuildPlayerTargets)
         player.CharacterRemoving:Connect(rebuildPlayerTargets)
     end
+
     Workspace.DescendantAdded:Connect(function(obj)
+        if not botAimEnabled then return end
         task.defer(function()
             if obj:IsA("Model") then
                 addStandardBot(obj)
                 addCustomModel(obj)
             elseif obj:IsA("Humanoid") then
-                local model = obj.Parent
-                if model and model:IsA("Model") then
-                    addStandardBot(model)
-                    addCustomModel(model)
+                local m = obj.Parent
+                if m and m:IsA("Model") then
+                    addStandardBot(m)
+                    addCustomModel(m)
                 end
             end
         end)
@@ -408,10 +462,10 @@ local function setupAimTracking()
             removeStandardBot(obj)
             removeCustomModel(obj)
         elseif obj:IsA("Humanoid") then
-            local model = obj.Parent
-            if model and model:IsA("Model") then
-                removeStandardBot(model)
-                removeCustomModel(model)
+            local m = obj.Parent
+            if m and m:IsA("Model") then
+                removeStandardBot(m)
+                removeCustomModel(m)
             end
         end
     end)
@@ -420,11 +474,11 @@ setupAimTracking()
 
 local function getCombinedTargets()
     local combined = {}
-    for _, t in ipairs(cachedPlayerTargets) do table.insert(combined, t) end
+    for _, t in ipairs(cachedPlayerTargets) do combined[#combined+1] = t end
     if botAimEnabled then
-        for _, t in ipairs(cachedBotTargets) do table.insert(combined, t) end
+        for _, t in ipairs(cachedBotTargets) do combined[#combined+1] = t end
         if espModelEnabled then
-            for _, t in ipairs(cachedCustomTargets) do table.insert(combined, t) end
+            for _, t in ipairs(cachedCustomTargets) do combined[#combined+1] = t end
         end
     end
     return combined
@@ -433,20 +487,24 @@ end
 local function getClosestTarget()
     local closest = nil
     local shortestDist = math.huge
-    local screenCenter = Camera.ViewportSize / 2
-    local playerPos = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-    playerPos = playerPos and playerPos.Position or Vector3.new(0,0,0)
+    local vp = Camera.ViewportSize
+    local cx, cy = vp.X/2, vp.Y/2
+    local char = localPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local pPos = root and root.Position or Vector3.new(0,0,0)
     for _, t in ipairs(getCombinedTargets()) do
         local aimPart = t.aimPart
         if aimPart and aimPart.Parent then
-            local dist = (playerPos - aimPart.Position).Magnitude
-            local screenPoint, onScreen = Camera:WorldToViewportPoint(aimPart.Position)
-            local distScreen = (Vector2.new(screenPoint.X, screenPoint.Y) - screenCenter).Magnitude
-            if onScreen and distScreen < shortestDist and distScreen <= fov then
-                if not teamCheck then
+            local pos = aimPart.Position
+            local screenPoint, onScreen = Camera:WorldToViewportPoint(pos)
+            if onScreen then
+                local dx, dy = screenPoint.X - cx, screenPoint.Y - cy
+                local dScreen = math.sqrt(dx*dx + dy*dy)
+                if dScreen < shortestDist and dScreen <= fov then
                     closest = t
-                    shortestDist = distScreen
-                    currentTargetDistance = math.floor(dist)
+                    shortestDist = dScreen
+                    local ddx, ddy, ddz = pPos.X - pos.X, pPos.Y - pos.Y, pPos.Z - pos.Z
+                    currentTargetDistance = math.floor(math.sqrt(ddx*ddx + ddy*ddy + ddz*ddz))
                 end
             end
         end
@@ -463,28 +521,27 @@ local function lockOnTarget()
             local pred = math.clamp(0.05 + (currentTargetDistance / 2000), 0.02, 0.1)
             targetPos = targetPos + (vel * pred)
         end
-        local desiredCF = CFrame.new(Camera.CFrame.Position, targetPos)
-        Camera.CFrame = Camera.CFrame:Lerp(desiredCF, smoothing)
+        Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPos), smoothing)
     else
         currentTarget = nil
     end
 end
 
 RunService.RenderStepped:Connect(function()
-    if aimbotEnabled then
-        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-            if not currentTarget then
-                currentTarget = getClosestTarget()
-            end
-            if currentTarget then
-                lockOnTarget()
-            end
-        else
-            currentTarget = nil
+    if not aimbotEnabled then return end
+    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        if not currentTarget then
+            currentTarget = getClosestTarget()
         end
+        if currentTarget then
+            lockOnTarget()
+        end
+    else
+        currentTarget = nil
     end
 end)
 
+-- ===== GUI =====
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "MEDW_Menu"
 screenGui.Parent = CoreGui
@@ -564,7 +621,6 @@ local function createToggle(label, yPos, callback, initial)
 
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(0.6, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 0, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = Color3.fromRGB(205, 205, 215)
@@ -614,7 +670,6 @@ predLine.Parent = content
 
 local predLbl = Instance.new("TextLabel")
 predLbl.Size = UDim2.new(0.6, 0, 1, 0)
-predLbl.Position = UDim2.new(0, 0, 0, 0)
 predLbl.BackgroundTransparency = 1
 predLbl.Text = "Predict"
 predLbl.TextColor3 = Color3.fromRGB(205, 205, 215)
@@ -650,7 +705,6 @@ local function createSlider(label, yPos, minVal, maxVal, initial, callback)
 
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(0.3, 0, 1, 0)
-    lbl.Position = UDim2.new(0, 0, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = Color3.fromRGB(190, 190, 200)
@@ -820,7 +874,6 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ===== Collapse (финальный, без смещений) =====
 local collapsed = false
 local originalSize = UDim2.new(0, 210, 0, 355)
 
