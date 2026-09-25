@@ -1,4 +1,3 @@
--- MEDW: ESP + Aimlock (Heavily Optimized)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -29,7 +28,6 @@ local predictEnabled = true
 local activeESP = {}
 local pending = {}
 
--- ===== Оптимизация: очередь обработки =====
 local scanQueue = {}
 local scanQueued = {}
 local processingQueue = false
@@ -60,7 +58,6 @@ local function enqueue(obj)
     end)
 end
 
--- ===== Фильтры (быстрые) =====
 local decorationKeywords = {
     door=true, window=true, wall=true, floor=true, ceiling=true, prop=true,
     decoration=true, furniture=true, stairs=true, railing=true, pipe=true,
@@ -221,7 +218,6 @@ function processModel(model)
     addESP(model, tType, ref)
 end
 
--- ===== Батчевое сканирование (без фризов) =====
 local fullScanning = false
 
 local function refreshESP()
@@ -233,14 +229,12 @@ local function refreshESP()
     fullScanning = true
 
     task.spawn(function()
-        -- 1. Игроки (мгновенно)
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= localPlayer and player.Character then
                 processModel(player.Character)
             end
         end
 
-        -- 2. Workspace батчами
         local list = Workspace:GetDescendants()
         local total = #list
         local batch = 60
@@ -266,7 +260,6 @@ local function refreshESP()
     end)
 end
 
--- ===== Отслеживание изменений (через очередь, не блокирует) =====
 local function startTrackingESP()
     Workspace.DescendantAdded:Connect(function(obj)
         if not (espPlayersEnabled or espBotsEnabled or espModelEnabled) then return end
@@ -291,7 +284,6 @@ local function startTrackingESP()
     end)
 end
 
--- ===== AIM (кэш целей, инкрементально) =====
 local cachedPlayerTargets = {}
 local cachedBotTargets = {}
 local cachedCustomTargets = {}
@@ -368,15 +360,11 @@ local function removeCustomModel(model)
     end
 end
 
--- Полная перестройка AIM (батчами, не блокирует)
 local function rebuildAllTargets()
     if aimRebuilding then return end
     aimRebuilding = true
     task.spawn(function()
-        -- Игроки
         rebuildPlayerTargets()
-
-        -- Боты
         local newBots = {}
         if botAimEnabled then
             local list = Workspace:GetDescendants()
@@ -401,8 +389,7 @@ local function rebuildAllTargets()
             end
         end
         cachedBotTargets = newBots
-
-        -- Кастомные модели
+            
         local newCustom = {}
         if botAimEnabled and espModelEnabled then
             local list = Workspace:GetDescendants()
@@ -541,7 +528,6 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ===== GUI =====
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "MEDW_Menu"
 screenGui.Parent = CoreGui
