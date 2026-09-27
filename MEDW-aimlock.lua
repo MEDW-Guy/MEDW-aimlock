@@ -1,927 +1,1039 @@
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
+local P=game:GetService("Players")
+local W=game:GetService("Workspace")
+local U=game:GetService("UserInputService")
+local R=game:GetService("RunService")
+local C=game:GetService("CoreGui")
+local LP=P.LocalPlayer
+local CAM=workspace.CurrentCamera
 
-local localPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local AB=false
+local E1=false
+local E2=false
+local E3=false
+local H1=false
+local B1=false
+local H2=false
 
-local aimbotEnabled = false
-local espPlayersEnabled = false
-local espBotsEnabled = false
-local espModelEnabled = false
-local headAimPlayers = false
-local botAimEnabled = false
-local headAimBots = false
-local fov = 120
-local teamCheck = false
-local currentTarget = nil
-local currentTargetDistance = "N/A"
-local currentColor = Color3.fromHSV(0, 1, 1)
+local FN=20
+local FF=400
+local PN=320
+local PF=160
+local TC=false
+local CT=nil
+local CD=0
+local CC=Color3.fromHSV(0,1,1)
+local FT=0.5
+local OT=0.3
+local SM=0.2
+local PR=true
 
-local fillTransparency = 0.5
-local outlineTransparency = 0.3
-local smoothing = 0.2
-local predictEnabled = true
+local AE={}
+local PD={}
+local SQ={}
+local SQs={}
+local PQs=false
 
-local activeESP = {}
-local pending = {}
+local function gF(d)
+    if d<=FN then return PN end
+    if d>=FF then return PF end
+    local t=(d-FN)/(FF-FN)
+    t=t*t
+    return PN+(PF-PN)*t
+end
 
-local scanQueue = {}
-local scanQueued = {}
-local processingQueue = false
-
-local function enqueue(obj)
-    if scanQueued[obj] then return end
-    scanQueued[obj] = true
-    scanQueue[#scanQueue + 1] = obj
-    if processingQueue then return end
-    processingQueue = true
+local function eQ(o)
+    if SQs[o] then return end
+    SQs[o]=true
+    SQ[#SQ+1]=o
+    if PQs then return end
+    PQs=true
     task.spawn(function()
-        while #scanQueue > 0 do
-            local n = #scanQueue
-            local batch = n > 40 and 40 or n
-            for i = 1, batch do
-                local o = scanQueue[i]
-                scanQueued[o] = nil
-                if o and o.Parent then
-                    processModel(o)
-                end
+        while #SQ>0 do
+            local n=#SQ
+            local b=n>40 and 40 or n
+            for i=1,b do
+                local x=SQ[i]
+                SQs[x]=nil
+                if x and x.Parent then pM(x) end
             end
-            for i = 1, batch do scanQueue[i] = nil end
-            if #scanQueue > 0 then
-                RunService.Heartbeat:Wait()
-            end
+            for i=1,b do SQ[i]=nil end
+            if #SQ>0 then R.Heartbeat:Wait() end
         end
-        processingQueue = false
+        PQs=false
     end)
 end
 
-local decorationKeywords = {
-    door=true, window=true, wall=true, floor=true, ceiling=true, prop=true,
-    decoration=true, furniture=true, stairs=true, railing=true, pipe=true,
-    vent=true, crate=true, barrel=true, container=true
-}
+local DK={door=true,window=true,wall=true,floor=true,ceiling=true,prop=true,decoration=true,furniture=true,stairs=true,railing=true,pipe=true,vent=true,crate=true,barrel=true,container=true}
 
-local function hasForbiddenName(name)
-    name = name:lower()
-    for w in pairs(decorationKeywords) do
-        if string.find(name, w, 1, true) then return true end
+local function hN(n)
+    n=n:lower()
+    for w in pairs(DK) do if string.find(n,w,1,true) then return true end end
+    return false
+end
+
+local function iD(m)
+    if hN(m.Name) then return true end
+    local p=m.Parent
+    local d=0
+    while p and d<4 do
+        local n=p.Name
+        if n=="activemap" or n=="map" or n=="decor" or n=="decorations" then return true end
+        if hN(n) then return true end
+        p=p.Parent
+        d=d+1
     end
     return false
 end
 
-local function isDecoration(model)
-    if hasForbiddenName(model.Name) then return true end
-    local p = model.Parent
-    local depth = 0
-    while p and depth < 4 do
-        local n = p.Name
-        if n == "activemap" or n == "map" or n == "decor" or n == "decorations" then
-            return true
-        end
-        if hasForbiddenName(n) then return true end
-        p = p.Parent
-        depth = depth + 1
-    end
-    return false
-end
-
-local function isStandardBot(model)
-    if not model or model == localPlayer.Character then return false end
-    if not model:FindFirstChild("HumanoidRootPart") then return false end
-    if Players:GetPlayerFromCharacter(model) then return false end
+local function iSB(m)
+    if not m or m==LP.Character then return false end
+    if not m:FindFirstChild("HumanoidRootPart") then return false end
+    if P:GetPlayerFromCharacter(m) then return false end
     return true
 end
 
-local function isCustomModel(model)
-    if not model or model == localPlayer.Character then return false end
-    if Players:GetPlayerFromCharacter(model) then return true end
-    if isDecoration(model) then return false end
-    if model:FindFirstChild("Humanoid") then return true end
-    local hasHead = model:FindFirstChild("Head") ~= nil
-    local hasAnim = model:FindFirstChild("AnimationController") ~= nil
-    if (hasHead or hasAnim) and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart) then
-        return true
-    end
-    local name = model.Name:lower()
-    if (string.find(name, "character", 1, true) or string.find(name, "player", 1, true) or string.find(name, "bot", 1, true))
-        and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart) then
-        return true
-    end
+local function iCM(m)
+    if not m or m==LP.Character then return false end
+    if P:GetPlayerFromCharacter(m) then return true end
+    if iD(m) then return false end
+    if m:FindFirstChild("Humanoid") then return true end
+    local hH=m:FindFirstChild("Head")~=nil
+    local hA=m:FindFirstChild("AnimationController")~=nil
+    if (hH or hA) and (m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart) then return true end
+    local n=m.Name:lower()
+    if (string.find(n,"character",1,true) or string.find(n,"player",1,true) or string.find(n,"bot",1,true)) and (m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart) then return true end
     return false
 end
 
-local function getTargetType(model)
-    if not model or model == localPlayer.Character then return nil end
-    local plr = Players:GetPlayerFromCharacter(model)
-    if plr then return "player", plr end
-    if isStandardBot(model) then return "bot", model end
-    if isCustomModel(model) then return "custom", model end
+local function gT(m)
+    if not m or m==LP.Character then return nil end
+    local pl=P:GetPlayerFromCharacter(m)
+    if pl then return "player",pl end
+    if iSB(m) then return "bot",m end
+    if iCM(m) then return "custom",m end
     return nil
 end
 
-local function getName(model, tType, ref)
-    if tType == "player" and ref then return ref.Name end
-    if tType == "bot" and ref then return ref.Name or "Bot" end
-    if tType == "custom" and ref then return ref.Name or "Model" end
-    return model.Name or "?"
+local function gN(m,t,r)
+    if t=="player" and r then return r.Name end
+    if t=="bot" and r then return r.Name or "Bot" end
+    if t=="custom" and r then return r.Name or "Model" end
+    return m.Name or "?"
 end
 
-local function getBillboardPart(model)
-    local part = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-    if part then return part end
-    for _, c in ipairs(model:GetChildren()) do
-        if c:IsA("BasePart") then return c end
-    end
+local function gB(m)
+    local p=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+    if p then return p end
+    for _,c in ipairs(m:GetChildren()) do if c:IsA("BasePart") then return c end end
     return nil
 end
 
-local function addESP(model, tType, ref)
-    if pending[model] or activeESP[model] then return end
-    pending[model] = true
+local function cB(m,n)
+    local p=gB(m)
+    if not p then return nil end
+    local bb=Instance.new("BillboardGui")
+    bb.Size=UDim2.new(0,200,0,50)
+    bb.StudsOffset=Vector3.new(0,3,0)
+    bb.AlwaysOnTop=true
+    bb.Parent=p
+    local tl=Instance.new("TextLabel")
+    tl.Size=UDim2.new(1,0,1,0)
+    tl.BackgroundTransparency=1
+    tl.Text=n
+    tl.TextColor3=Color3.new(1,1,1)
+    tl.TextSize=10
+    tl.Font=Enum.Font.GothamBold
+    tl.TextStrokeTransparency=0.5
+    tl.Parent=bb
+    return bb
+end
+
+local function aE(m,t,r)
+    if PD[m] or AE[m] then return end
+    PD[m]=true
     task.spawn(function()
-        local name = getName(model, tType, ref)
-        local hl = Instance.new("Highlight")
-        hl.FillColor = currentColor
-        hl.OutlineColor = Color3.new(1,1,1)
-        hl.FillTransparency = fillTransparency
-        hl.OutlineTransparency = outlineTransparency
-        hl.Adornee = model
-        hl.Parent = model
-        local bb = nil
-        local part = getBillboardPart(model)
-        if part then
-            bb = Instance.new("BillboardGui")
-            bb.Size = UDim2.new(0,200,0,50)
-            bb.StudsOffset = Vector3.new(0,3,0)
-            bb.AlwaysOnTop = true
-            bb.Parent = part
-            local tl = Instance.new("TextLabel")
-            tl.Size = UDim2.new(1,0,1,0)
-            tl.BackgroundTransparency = 1
-            tl.Text = name
-            tl.TextColor3 = Color3.new(1,1,1)
-            tl.TextScaled = false
-            tl.TextSize = 10
-            tl.Font = Enum.Font.GothamBold
-            tl.TextStrokeTransparency = 0.5
-            tl.Parent = bb
-        end
-        activeESP[model] = {hl, bb}
-        pending[model] = nil
+        local n=gN(m,t,r)
+        if not m.Parent then PD[m]=nil return end
+        local hl=Instance.new("Highlight")
+        hl.FillColor=CC
+        hl.OutlineColor=Color3.new(1,1,1)
+        hl.FillTransparency=FT
+        hl.OutlineTransparency=OT
+        hl.Adornee=m
+        hl.Parent=m
+        local bb=cB(m,n)
+        AE[m]={hl,bb}
+        PD[m]=nil
     end)
 end
 
-local function removeESP(model)
-    local data = activeESP[model]
-    if data then
-        if data[1] then data[1]:Destroy() end
-        if data[2] then data[2]:Destroy() end
-        activeESP[model] = nil
+local function rE(m)
+    local d=AE[m]
+    if d then
+        if d[1] then d[1]:Destroy() end
+        if d[2] then d[2]:Destroy() end
+        AE[m]=nil
     end
-    pending[model] = nil
+    PD[m]=nil
 end
 
-local function clearAllESP()
-    for model in pairs(activeESP) do removeESP(model) end
+local function cA()
+    for m in pairs(AE) do rE(m) end
 end
 
-local function updateAllColors()
-    for _, data in pairs(activeESP) do
-        if data and data[1] then
-            data[1].FillColor = currentColor
-            data[1].FillTransparency = fillTransparency
-            data[1].OutlineTransparency = outlineTransparency
+local function uC()
+    for _,d in pairs(AE) do
+        if d and d[1] then
+            d[1].FillColor=CC
+            d[1].FillTransparency=FT
+            d[1].OutlineTransparency=OT
         end
     end
 end
 
-function processModel(model)
-    if not model or model == localPlayer.Character then return end
-    local tType, ref = getTargetType(model)
-    if not tType then
-        if activeESP[model] then removeESP(model) end
+function pM(m)
+    if not m or m==LP.Character then return end
+    local t,r=gT(m)
+    if not t then
+        if AE[m] then rE(m) end
         return
     end
-    local enabled = false
-    if tType == "player" and espPlayersEnabled then enabled = true
-    elseif tType == "bot" and espBotsEnabled then enabled = true
-    elseif tType == "custom" and espModelEnabled then enabled = true
+    local en=false
+    if t=="player" and E1 then en=true
+    elseif t=="bot" and E2 then en=true
+    elseif t=="custom" and E3 then en=true
     end
-    if not enabled then
-        if activeESP[model] then removeESP(model) end
+    if not en then
+        if AE[m] then rE(m) end
         return
     end
-    if activeESP[model] then return end
-    addESP(model, tType, ref)
+    local ex=AE[m]
+    if ex then
+        local hl,bb=ex[1],ex[2]
+        local br=(not hl or not hl.Parent)
+        if not br and bb then
+            local p=bb.Parent
+            if not p or not p:IsDescendantOf(m) then br=true end
+        end
+        if not br then return end
+        rE(m)
+    end
+    aE(m,t,r)
 end
 
-local fullScanning = false
+local FS=false
+local RQ=false
 
-local function refreshESP()
-    if not espPlayersEnabled and not espBotsEnabled and not espModelEnabled then
-        clearAllESP()
-        return
-    end
-    if fullScanning then return end
-    fullScanning = true
-
+local function rF()
+    if not E1 and not E2 and not E3 then cA() return end
+    if FS then RQ=true return end
+    FS=true
     task.spawn(function()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= localPlayer and player.Character then
-                processModel(player.Character)
-            end
+        for _,pl in ipairs(P:GetPlayers()) do
+            if pl~=LP and pl.Character then pM(pl.Character) end
         end
-
-        local list = Workspace:GetDescendants()
-        local total = #list
-        local batch = 60
-        local i = 1
-        while i <= total do
-            local stop = i + batch - 1
-            if stop > total then stop = total end
-            for j = i, stop do
-                local o = list[j]
-                if o:IsA("Model") then
-                    processModel(o)
-                elseif o:IsA("Humanoid") then
-                    local m = o.Parent
-                    if m and m:IsA("Model") then processModel(m) end
-                end
-            end
-            i = stop + 1
-            if i <= total then
-                RunService.Heartbeat:Wait()
-            end
+        local hs={}
+        local ms={}
+        for _,o in ipairs(W:GetDescendants()) do
+            if o:IsA("Humanoid") then hs[#hs+1]=o
+            elseif o:IsA("Model") then ms[#ms+1]=o end
         end
-        fullScanning = false
+        local tot=#hs
+        local i=1
+        while i<=tot do
+            local s=math.min(i+39,tot)
+            for j=i,s do
+                local m=hs[j].Parent
+                if m and m:IsA("Model") then pM(m) end
+            end
+            i=s+1
+            if i<=tot then R.Heartbeat:Wait() end
+        end
+        tot=#ms
+        i=1
+        while i<=tot do
+            local s=math.min(i+49,tot)
+            for j=i,s do pM(ms[j]) end
+            i=s+1
+            if i<=tot then R.Heartbeat:Wait() end
+        end
+        FS=false
+        if RQ then RQ=false rF() end
     end)
 end
 
-local function startTrackingESP()
-    Workspace.DescendantAdded:Connect(function(obj)
-        if not (espPlayersEnabled or espBotsEnabled or espModelEnabled) then return end
-        if obj:IsA("Model") or obj:IsA("Humanoid") then
-            task.defer(function()
-                if obj:IsA("Model") then
-                    enqueue(obj)
-                else
-                    local m = obj.Parent
-                    if m and m:IsA("Model") then enqueue(m) end
-                end
-            end)
-        end
-    end)
-    Workspace.DescendantRemoving:Connect(function(obj)
-        if obj:IsA("Model") and activeESP[obj] then
-            removeESP(obj)
-        elseif obj:IsA("Humanoid") then
-            local m = obj.Parent
-            if m and m:IsA("Model") and activeESP[m] then removeESP(m) end
-        end
-    end)
-end
-
-local cachedPlayerTargets = {}
-local cachedBotTargets = {}
-local cachedCustomTargets = {}
-local aimDirty = false
-local aimRebuilding = false
-
-local function rebuildPlayerTargets()
-    local new = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= localPlayer and player.Character then
-            local char = player.Character
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if root then
-                local aimPart = root
-                if headAimPlayers then
-                    local head = char:FindFirstChild("Head")
-                    if head then aimPart = head end
-                end
-                new[#new+1] = { aimPart = aimPart, type = "player", ref = player, model = char }
-            end
-        end
-    end
-    cachedPlayerTargets = new
-end
-
-local function addStandardBot(model)
-    if not botAimEnabled then return end
-    if not isStandardBot(model) then return end
-    for _, t in ipairs(cachedBotTargets) do
-        if t.model == model then return end
-    end
-    local root = model:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    local aimPart = root
-    if headAimBots then
-        local head = model:FindFirstChild("Head")
-        if head and head:IsA("BasePart") then aimPart = head end
-    end
-    cachedBotTargets[#cachedBotTargets+1] = { aimPart = aimPart, type = "bot", ref = model, model = model }
-end
-
-local function removeStandardBot(model)
-    for i, t in ipairs(cachedBotTargets) do
-        if t.model == model then
-            table.remove(cachedBotTargets, i)
-            break
-        end
-    end
-end
-
-local function addCustomModel(model)
-    if not botAimEnabled or not espModelEnabled then return end
-    if not isCustomModel(model) then return end
-    if Players:GetPlayerFromCharacter(model) then return end
-    for _, t in ipairs(cachedCustomTargets) do
-        if t.model == model then return end
-    end
-    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-    if not root then return end
-    local aimPart = root
-    if headAimBots then
-        local head = model:FindFirstChild("Head") or model:FindFirstChild("head")
-        if head and head:IsA("BasePart") then aimPart = head end
-    end
-    cachedCustomTargets[#cachedCustomTargets+1] = { aimPart = aimPart, type = "custom", ref = model, model = model }
-end
-
-local function removeCustomModel(model)
-    for i, t in ipairs(cachedCustomTargets) do
-        if t.model == model then
-            table.remove(cachedCustomTargets, i)
-            break
-        end
-    end
-end
-
-local function rebuildAllTargets()
-    if aimRebuilding then return end
-    aimRebuilding = true
-    task.spawn(function()
-        rebuildPlayerTargets()
-        local newBots = {}
-        if botAimEnabled then
-            local list = Workspace:GetDescendants()
-            local batch = 80
-            for i = 1, #list, batch do
-                local stop = math.min(i + batch - 1, #list)
-                for j = i, stop do
-                    local o = list[j]
-                    if o:IsA("Model") and isStandardBot(o) then
-                        local root = o:FindFirstChild("HumanoidRootPart")
-                        if root then
-                            local aimPart = root
-                            if headAimBots then
-                                local head = o:FindFirstChild("Head")
-                                if head and head:IsA("BasePart") then aimPart = head end
-                            end
-                            newBots[#newBots+1] = { aimPart = aimPart, type = "bot", ref = o, model = o }
-                        end
-                    end
-                end
-                RunService.Heartbeat:Wait()
-            end
-        end
-        cachedBotTargets = newBots
-            
-        local newCustom = {}
-        if botAimEnabled and espModelEnabled then
-            local list = Workspace:GetDescendants()
-            local batch = 80
-            for i = 1, #list, batch do
-                local stop = math.min(i + batch - 1, #list)
-                for j = i, stop do
-                    local o = list[j]
-                    if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) and isCustomModel(o) then
-                        local root = o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
-                        if root then
-                            local aimPart = root
-                            if headAimBots then
-                                local head = o:FindFirstChild("Head") or o:FindFirstChild("head")
-                                if head and head:IsA("BasePart") then aimPart = head end
-                            end
-                            newCustom[#newCustom+1] = { aimPart = aimPart, type = "custom", ref = o, model = o }
-                        end
-                    end
-                end
-                RunService.Heartbeat:Wait()
-            end
-        end
-        cachedCustomTargets = newCustom
-
-        aimRebuilding = false
-        aimDirty = false
-    end)
-end
-
-local function setupAimTracking()
-    rebuildPlayerTargets()
-    Players.PlayerAdded:Connect(rebuildPlayerTargets)
-    Players.PlayerRemoving:Connect(rebuildPlayerTargets)
-    for _, player in ipairs(Players:GetPlayers()) do
-        player.CharacterAdded:Connect(rebuildPlayerTargets)
-        player.CharacterRemoving:Connect(rebuildPlayerTargets)
-    end
-
-    Workspace.DescendantAdded:Connect(function(obj)
-        if not botAimEnabled then return end
+local function sT()
+    W.DescendantAdded:Connect(function(o)
+        if not (E1 or E2 or E3) and not B1 then return end
         task.defer(function()
-            if obj:IsA("Model") then
-                addStandardBot(obj)
-                addCustomModel(obj)
-            elseif obj:IsA("Humanoid") then
-                local m = obj.Parent
+            if o:IsA("Humanoid") or o:IsA("BasePart") then
+                local m=o.Parent
+                if m and m:IsA("Model") and AE[m] then
+                    rE(m)
+                    pM(m)
+                    return
+                end
+            end
+            if o:IsA("Model") then eQ(o)
+            elseif o:IsA("Humanoid") then
+                local m=o.Parent
+                if m and m:IsA("Model") then eQ(m) end
+            end
+        end)
+    end)
+    W.DescendantRemoving:Connect(function(o)
+        if o:IsA("Model") and AE[o] then rE(o)
+        elseif o:IsA("Humanoid") then
+            local m=o.Parent
+            if m and m:IsA("Model") and AE[m] then rE(m) end
+        end
+    end)
+end
+
+local CP={}
+local CB={}
+local CM={}
+local AR=false
+
+local function rP()
+    local n={}
+    for _,pl in ipairs(P:GetPlayers()) do
+        if pl~=LP and pl.Character then
+            local ch=pl.Character
+            local rt=ch:FindFirstChild("HumanoidRootPart")
+            if rt then
+                local ap=rt
+                if H1 then
+                    local hd=ch:FindFirstChild("Head")
+                    if hd then ap=hd end
+                end
+                n[#n+1]={aimPart=ap,type="player",ref=pl,model=ch}
+            end
+        end
+    end
+    CP=n
+end
+
+local function aSB(m)
+    if not B1 then return end
+    if not iSB(m) then return end
+    for _,t in ipairs(CB) do
+        if t.model==m then
+            if t.aimPart and t.aimPart.Parent then return end
+            if H2 then
+                local hd=m:FindFirstChild("Head")
+                if hd and hd:IsA("BasePart") then t.aimPart=hd
+                else t.aimPart=m:FindFirstChild("HumanoidRootPart") end
+            else
+                t.aimPart=m:FindFirstChild("HumanoidRootPart")
+            end
+            return
+        end
+    end
+    local rt=m:FindFirstChild("HumanoidRootPart")
+    if not rt then return end
+    local ap=rt
+    if H2 then
+        local hd=m:FindFirstChild("Head")
+        if hd and hd:IsA("BasePart") then ap=hd end
+    end
+    CB[#CB+1]={aimPart=ap,type="bot",ref=m,model=m}
+end
+
+local function rSB(m)
+    for i,t in ipairs(CB) do
+        if t.model==m then table.remove(CB,i) break end
+    end
+end
+
+local function aCM(m)
+    if not B1 or not E3 then return end
+    if not iCM(m) then return end
+    if P:GetPlayerFromCharacter(m) then return end
+    for _,t in ipairs(CM) do
+        if t.model==m then
+            if t.aimPart and t.aimPart.Parent then return end
+            local rt=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            if rt then
+                t.aimPart=rt
+                if H2 then
+                    local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
+                    if hd and hd:IsA("BasePart") then t.aimPart=hd end
+                end
+            end
+            return
+        end
+    end
+    local rt=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+    if not rt then return end
+    local ap=rt
+    if H2 then
+        local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
+        if hd and hd:IsA("BasePart") then ap=hd end
+    end
+    CM[#CM+1]={aimPart=ap,type="custom",ref=m,model=m}
+end
+
+local function rCM(m)
+    for i,t in ipairs(CM) do
+        if t.model==m then table.remove(CM,i) break end
+    end
+end
+
+local function rA()
+    if AR then return end
+    AR=true
+    task.spawn(function()
+        rP()
+        local nb={}
+        if B1 then
+            local l=W:GetDescendants()
+            local b=80
+            for i=1,#l,b do
+                local s=math.min(i+b-1,#l)
+                for j=i,s do
+                    local o=l[j]
+                    if o:IsA("Model") and iSB(o) then
+                        local rt=o:FindFirstChild("HumanoidRootPart")
+                        if rt then
+                            local ap=rt
+                            if H2 then
+                                local hd=o:FindFirstChild("Head")
+                                if hd and hd:IsA("BasePart") then ap=hd end
+                            end
+                            nb[#nb+1]={aimPart=ap,type="bot",ref=o,model=o}
+                        end
+                    end
+                end
+                R.Heartbeat:Wait()
+            end
+        end
+        CB=nb
+        local nc={}
+        if B1 and E3 then
+            local l=W:GetDescendants()
+            local b=80
+            for i=1,#l,b do
+                local s=math.min(i+b-1,#l)
+                for j=i,s do
+                    local o=l[j]
+                    if o:IsA("Model") and not P:GetPlayerFromCharacter(o) and iCM(o) then
+                        local rt=o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
+                        if rt then
+                            local ap=rt
+                            if H2 then
+                                local hd=o:FindFirstChild("Head") or o:FindFirstChild("head")
+                                if hd and hd:IsA("BasePart") then ap=hd end
+                            end
+                            nc[#nc+1]={aimPart=ap,type="custom",ref=o,model=o}
+                        end
+                    end
+                end
+                R.Heartbeat:Wait()
+            end
+        end
+        CM=nc
+        AR=false
+    end)
+end
+
+local function sA()
+    rP()
+    P.PlayerAdded:Connect(function(pl)
+        rP()
+        pl.CharacterAdded:Connect(rP)
+        pl.CharacterRemoving:Connect(rP)
+    end)
+    P.PlayerRemoving:Connect(rP)
+    for _,pl in ipairs(P:GetPlayers()) do
+        pl.CharacterAdded:Connect(rP)
+        pl.CharacterRemoving:Connect(rP)
+    end
+    W.DescendantAdded:Connect(function(o)
+        if not B1 then return end
+        task.defer(function()
+            if o:IsA("Model") then
+                aSB(o)
+                aCM(o)
+            elseif o:IsA("Humanoid") then
+                local m=o.Parent
                 if m and m:IsA("Model") then
-                    addStandardBot(m)
-                    addCustomModel(m)
+                    aSB(m)
+                    aCM(m)
                 end
             end
         end)
     end)
-    Workspace.DescendantRemoving:Connect(function(obj)
-        if obj:IsA("Model") then
-            removeStandardBot(obj)
-            removeCustomModel(obj)
-        elseif obj:IsA("Humanoid") then
-            local m = obj.Parent
+    W.DescendantRemoving:Connect(function(o)
+        if o:IsA("Model") then
+            rSB(o)
+            rCM(o)
+        elseif o:IsA("Humanoid") then
+            local m=o.Parent
             if m and m:IsA("Model") then
-                removeStandardBot(m)
-                removeCustomModel(m)
+                rSB(m)
+                rCM(m)
             end
         end
     end)
 end
-setupAimTracking()
+sA()
 
-local function getCombinedTargets()
-    local combined = {}
-    for _, t in ipairs(cachedPlayerTargets) do combined[#combined+1] = t end
-    if botAimEnabled then
-        for _, t in ipairs(cachedBotTargets) do combined[#combined+1] = t end
-        if espModelEnabled then
-            for _, t in ipairs(cachedCustomTargets) do combined[#combined+1] = t end
+local function gCT()
+    local cl=nil
+    local bs=math.huge
+    local vp=CAM.ViewportSize
+    local cx,cy=vp.X/2,vp.Y/2
+    local ch=LP.Character
+    local rt=ch and ch:FindFirstChild("HumanoidRootPart")
+    local pp=rt and rt.Position or CAM.CFrame.Position
+    local tg={}
+    for i=#CP,1,-1 do
+        local t=CP[i]
+        if not t.aimPart or not t.aimPart.Parent then table.remove(CP,i)
+        else tg[#tg+1]=t end
+    end
+    if B1 then
+        for i=#CB,1,-1 do
+            local t=CB[i]
+            if not t.aimPart or not t.aimPart.Parent then table.remove(CB,i)
+            else tg[#tg+1]=t end
+        end
+        if E3 then
+            for i=#CM,1,-1 do
+                local t=CM[i]
+                if not t.aimPart or not t.aimPart.Parent then table.remove(CM,i)
+                else tg[#tg+1]=t end
+            end
         end
     end
-    return combined
-end
-
-local function getClosestTarget()
-    local closest = nil
-    local shortestDist = math.huge
-    local vp = Camera.ViewportSize
-    local cx, cy = vp.X/2, vp.Y/2
-    local char = localPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local pPos = root and root.Position or Vector3.new(0,0,0)
-    for _, t in ipairs(getCombinedTargets()) do
-        local aimPart = t.aimPart
-        if aimPart and aimPart.Parent then
-            local pos = aimPart.Position
-            local screenPoint, onScreen = Camera:WorldToViewportPoint(pos)
-            if onScreen then
-                local dx, dy = screenPoint.X - cx, screenPoint.Y - cy
-                local dScreen = math.sqrt(dx*dx + dy*dy)
-                if dScreen < shortestDist and dScreen <= fov then
-                    closest = t
-                    shortestDist = dScreen
-                    local ddx, ddy, ddz = pPos.X - pos.X, pPos.Y - pos.Y, pPos.Z - pos.Z
-                    currentTargetDistance = math.floor(math.sqrt(ddx*ddx + ddy*ddy + ddz*ddz))
+    for _,t in ipairs(tg) do
+        local ap=t.aimPart
+        local pos=ap.Position
+        local sp,os=CAM:WorldToViewportPoint(pos)
+        if os then
+            local dx,dy=sp.X-cx,sp.Y-cy
+            local ds=math.sqrt(dx*dx+dy*dy)
+            local ddx,ddy,ddz=pp.X-pos.X,pp.Y-pos.Y,pp.Z-pos.Z
+            local wd=math.sqrt(ddx*ddx+ddy*ddy+ddz*ddz)
+            local ef=gF(wd)
+            if ds<=ef then
+                local sc=ds+wd*0.04
+                if sc<bs then
+                    bs=sc
+                    cl=t
+                    CD=wd
                 end
             end
         end
     end
-    return closest
+    return cl
 end
 
-local function lockOnTarget()
-    if currentTarget and currentTarget.aimPart and currentTarget.aimPart.Parent then
-        local aimPart = currentTarget.aimPart
-        local targetPos = aimPart.Position
-        if predictEnabled then
-            local vel = aimPart.Velocity or Vector3.new(0,0,0)
-            local pred = math.clamp(0.05 + (currentTargetDistance / 2000), 0.02, 0.1)
-            targetPos = targetPos + (vel * pred)
+local function lT()
+    if CT and CT.aimPart and CT.aimPart.Parent then
+        local ap=CT.aimPart
+        local tp=ap.Position
+        if PR then
+            local v=ap.Velocity or Vector3.new(0,0,0)
+            local pd=math.clamp(0.05+(CD/2000),0.02,0.1)
+            tp=tp+(v*pd)
         end
-        Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPos), smoothing)
+        CAM.CFrame=CAM.CFrame:Lerp(CFrame.new(CAM.CFrame.Position,tp),SM)
     else
-        currentTarget = nil
+        CT=nil
     end
 end
 
-RunService.RenderStepped:Connect(function()
-    if not aimbotEnabled then return end
-    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        if not currentTarget then
-            currentTarget = getClosestTarget()
-        end
-        if currentTarget then
-            lockOnTarget()
-        end
+R.RenderStepped:Connect(function()
+    if not AB then return end
+    if U:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        if not CT or not CT.aimPart or not CT.aimPart.Parent then CT=gCT() end
+        if CT then lT() end
     else
-        currentTarget = nil
+        CT=nil
     end
 end)
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "MEDW_Menu"
-screenGui.Parent = CoreGui
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 210, 0, 355)
-mainFrame.Position = UDim2.new(1, -225, 0, 20)
-mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
-mainFrame.BackgroundTransparency = 0.08
-mainFrame.BorderSizePixel = 0
-mainFrame.ClipsDescendants = true
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Parent = screenGui
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
-
-local shadow = Instance.new("ImageLabel")
-shadow.Size = UDim2.new(1, 20, 1, 20)
-shadow.Position = UDim2.new(-0.05, 0, -0.05, 0)
-shadow.BackgroundTransparency = 1
-shadow.Image = "rbxassetid://1316045217"
-shadow.ImageColor3 = Color3.new(0,0,0)
-shadow.ImageTransparency = 0.6
-shadow.Parent = mainFrame
-
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, 0, 1, 0)
-content.Position = UDim2.new(0, 0, 0, 0)
-content.BackgroundTransparency = 1
-content.Parent = mainFrame
-
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 36)
-header.Position = UDim2.new(0, 0, 0, 0)
-header.BackgroundTransparency = 1
-header.Parent = content
-
-local logo = Instance.new("TextLabel")
-logo.Size = UDim2.new(0.7, 0, 1, 0)
-logo.Position = UDim2.new(0.15, 0, 0, 0)
-logo.BackgroundTransparency = 1
-logo.Text = "MEDW"
-logo.TextColor3 = Color3.fromRGB(235, 235, 240)
-logo.Font = Enum.Font.GothamBold
-logo.TextSize = 20
-logo.TextXAlignment = Enum.TextXAlignment.Center
-logo.TextYAlignment = Enum.TextYAlignment.Center
-logo.Parent = header
-
-local collapseBtn = Instance.new("TextButton")
-collapseBtn.Size = UDim2.new(0, 30, 0, 30)
-collapseBtn.Position = UDim2.new(1, -40, 0, 3)
-collapseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
-collapseBtn.BorderSizePixel = 0
-collapseBtn.Text = "−"
-collapseBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
-collapseBtn.Font = Enum.Font.GothamBold
-collapseBtn.TextSize = 24
-collapseBtn.TextXAlignment = Enum.TextXAlignment.Center
-collapseBtn.TextYAlignment = Enum.TextYAlignment.Center
-collapseBtn.Parent = header
-Instance.new("UICorner", collapseBtn).CornerRadius = UDim.new(1, 0)
-
-local sep1 = Instance.new("Frame")
-sep1.Size = UDim2.new(0.92, 0, 0, 1)
-sep1.Position = UDim2.new(0.04, 0, 0, 38)
-sep1.BackgroundColor3 = Color3.fromRGB(65, 65, 75)
-sep1.BorderSizePixel = 0
-sep1.Parent = content
-
-local function createToggle(label, yPos, callback, initial)
-    local line = Instance.new("Frame")
-    line.Size = UDim2.new(0.92, 0, 0, 24)
-    line.Position = UDim2.new(0.04, 0, 0, yPos)
-    line.BackgroundTransparency = 1
-    line.Parent = content
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(0.6, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = label
-    lbl.TextColor3 = Color3.fromRGB(205, 205, 215)
-    lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextYAlignment = Enum.TextYAlignment.Center
-    lbl.Parent = line
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.25, 0, 1, 0)
-    btn.Position = UDim2.new(0.72, 0, 0, 0)
-    btn.BackgroundColor3 = initial and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
-    btn.BorderSizePixel = 0
-    btn.Text = initial and "ON" or "OFF"
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 11
-    btn.TextXAlignment = Enum.TextXAlignment.Center
-    btn.TextYAlignment = Enum.TextYAlignment.Center
-    btn.Parent = line
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
-
-    local state = initial
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
-        btn.Text = state and "ON" or "OFF"
-        callback(state)
-    end)
-    return btn
-end
-
-local espPlayerBtn = createToggle("Player ESP", 46, function(v) espPlayersEnabled = v refreshESP() end, espPlayersEnabled)
-local espBotBtn = createToggle("Bot ESP", 72, function(v) espBotsEnabled = v refreshESP() end, espBotsEnabled)
-local espModelBtn = createToggle("Model ESP", 98, function(v) espModelEnabled = v refreshESP(); if botAimEnabled then rebuildAllTargets() end end, espModelEnabled)
-local aimlockBtn = createToggle("Aimlock", 124, function(v) aimbotEnabled = v end, aimbotEnabled)
-local headPlayerBtn = createToggle("Head Aim (P)", 150, function(v) headAimPlayers = v; rebuildPlayerTargets(); currentTarget = nil end, headAimPlayers)
-local botAimBtnToggle = createToggle("Bot Aim", 176, function(v) botAimEnabled = v; if v then rebuildAllTargets() else cachedBotTargets = {}; cachedCustomTargets = {} end; currentTarget = nil end, botAimEnabled)
-local headBotBtn = createToggle("Head Aim (B)", 202, function(v) headAimBots = v; if botAimEnabled then rebuildAllTargets() end; currentTarget = nil end, headAimBots)
-
-local predLine = Instance.new("Frame")
-predLine.Size = UDim2.new(0.92, 0, 0, 22)
-predLine.Position = UDim2.new(0.04, 0, 0, 230)
-predLine.BackgroundTransparency = 1
-predLine.Parent = content
-
-local predLbl = Instance.new("TextLabel")
-predLbl.Size = UDim2.new(0.6, 0, 1, 0)
-predLbl.BackgroundTransparency = 1
-predLbl.Text = "Predict"
-predLbl.TextColor3 = Color3.fromRGB(205, 205, 215)
-predLbl.Font = Enum.Font.GothamMedium
-predLbl.TextSize = 13
-predLbl.TextXAlignment = Enum.TextXAlignment.Left
-predLbl.TextYAlignment = Enum.TextYAlignment.Center
-predLbl.Parent = predLine
-
-local predBtn = Instance.new("TextButton")
-predBtn.Size = UDim2.new(0.2, 0, 1, 0)
-predBtn.Position = UDim2.new(0.75, 0, 0, 0)
-predBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 0)
-predBtn.BorderSizePixel = 0
-predBtn.Text = "ON"
-predBtn.TextColor3 = Color3.new(1,1,1)
-predBtn.Font = Enum.Font.GothamBold
-predBtn.TextSize = 11
-predBtn.Parent = predLine
-Instance.new("UICorner", predBtn).CornerRadius = UDim.new(0, 5)
-predBtn.MouseButton1Click:Connect(function()
-    predictEnabled = not predictEnabled
-    predBtn.BackgroundColor3 = predictEnabled and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(60, 60, 70)
-    predBtn.Text = predictEnabled and "ON" or "OFF"
-end)
-
-local function createSlider(label, yPos, minVal, maxVal, initial, callback)
-    local line = Instance.new("Frame")
-    line.Size = UDim2.new(0.92, 0, 0, 24)
-    line.Position = UDim2.new(0.04, 0, 0, yPos)
-    line.BackgroundTransparency = 1
-    line.Parent = content
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(0.3, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = label
-    lbl.TextColor3 = Color3.fromRGB(190, 190, 200)
-    lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextYAlignment = Enum.TextYAlignment.Center
-    lbl.Parent = line
-
-    local slider = Instance.new("Frame")
-    slider.Size = UDim2.new(0.55, 0, 0.7, 0)
-    slider.Position = UDim2.new(0.38, 0, 0.15, 0)
-    slider.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
-    slider.BorderSizePixel = 0
-    slider.Parent = line
-    Instance.new("UICorner", slider).CornerRadius = UDim.new(0, 4)
-
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.new((initial - minVal) / (maxVal - minVal), 0, 1, 0)
-    fill.BackgroundColor3 = currentColor
-    fill.BorderSizePixel = 0
-    fill.Parent = slider
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
-
-    local knob = Instance.new("TextButton")
-    knob.Size = UDim2.new(0, 12, 0, 12)
-    knob.Position = UDim2.new((initial - minVal) / (maxVal - minVal), -6, 0.5, -6)
-    knob.BackgroundColor3 = Color3.fromRGB(235, 235, 240)
-    knob.BorderSizePixel = 0
-    knob.Text = ""
-    knob.Parent = slider
-    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-    local dragging = false
-    local function update(inputPos)
-        local relX = inputPos.X - slider.AbsolutePosition.X
-        local w = slider.AbsoluteSize.X
-        local val = math.clamp(relX / w, 0, 1) * (maxVal - minVal) + minVal
-        val = math.round(val * 100) / 100
-        fill.Size = UDim2.new((val - minVal) / (maxVal - minVal), 0, 1, 0)
-        knob.Position = UDim2.new((val - minVal) / (maxVal - minVal), -6, 0.5, -6)
-        callback(val)
-    end
-
-    knob.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            update(input.Position)
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            update(input.Position)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end)
-    slider.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            update(input.Position)
-            dragging = true
-        end
-    end)
-    return fill, knob
-end
-
-local _, _ = createSlider("Fill", 258, 0, 1, fillTransparency, function(v)
-    fillTransparency = v
-    updateAllColors()
-end)
-
-local _, _ = createSlider("Outline", 284, 0, 1, outlineTransparency, function(v)
-    outlineTransparency = v
-    updateAllColors()
-end)
-
-local _, _ = createSlider("Smooth", 310, 0.05, 0.95, smoothing, function(v)
-    smoothing = v
-end)
-
-local distLabel = Instance.new("TextLabel")
-distLabel.Size = UDim2.new(0.4, 0, 0, 18)
-distLabel.Position = UDim2.new(0.04, 0, 0, 332)
-distLabel.BackgroundTransparency = 1
-distLabel.Text = "Dist: N/A"
-distLabel.TextColor3 = Color3.fromRGB(170, 170, 180)
-distLabel.Font = Enum.Font.GothamBold
-distLabel.TextSize = 12
-distLabel.TextXAlignment = Enum.TextXAlignment.Left
-distLabel.Parent = content
-
-local colorSlider = Instance.new("Frame")
-colorSlider.Size = UDim2.new(0.5, 0, 0, 14)
-colorSlider.Position = UDim2.new(0.45, 0, 0, 334)
-colorSlider.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
-colorSlider.BorderSizePixel = 0
-colorSlider.Parent = content
-Instance.new("UICorner", colorSlider).CornerRadius = UDim.new(0, 4)
-
-local colorFill = Instance.new("Frame")
-colorFill.Size = UDim2.new(0,0,1,0)
-colorFill.BackgroundColor3 = Color3.fromHSV(0,1,1)
-colorFill.BorderSizePixel = 0
-colorFill.Parent = colorSlider
-Instance.new("UICorner", colorFill).CornerRadius = UDim.new(0, 4)
-
-local colorKnob = Instance.new("TextButton")
-colorKnob.Size = UDim2.new(0, 12, 0, 12)
-colorKnob.Position = UDim2.new(0, -6, 0.5, -6)
-colorKnob.BackgroundColor3 = Color3.fromRGB(235, 235, 240)
-colorKnob.BorderSizePixel = 0
-colorKnob.Text = ""
-colorKnob.Parent = colorSlider
-Instance.new("UICorner", colorKnob).CornerRadius = UDim.new(1, 0)
-
-local function updateColorSlider(value)
-    value = math.clamp(value,0,1)
-    currentColor = Color3.fromHSV(value,1,1)
-    colorFill.BackgroundColor3 = currentColor
-    colorFill.Size = UDim2.new(value,0,1,0)
-    colorKnob.Position = UDim2.new(value, -6, 0.5, -6)
-    updateAllColors()
-end
-
-local function makeColorDraggable()
-    local dragging = false
-    local function getValue(inputPos)
-        local relX = inputPos.X - colorSlider.AbsolutePosition.X
-        local w = colorSlider.AbsoluteSize.X
-        return math.clamp(relX / w, 0, 1)
-    end
-    colorKnob.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            updateColorSlider(getValue(input.Position))
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            updateColorSlider(getValue(input.Position))
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end)
-    colorSlider.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            updateColorSlider(getValue(input.Position))
-            dragging = true
-        end
-    end)
-end
-makeColorDraggable()
-
-RunService.RenderStepped:Connect(function()
-    if aimbotEnabled and currentTarget and currentTarget.aimPart and currentTarget.aimPart.Parent then
-        local root = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if root then
-            local d = (root.Position - currentTarget.aimPart.Position).Magnitude
-            distLabel.Text = "Dist: " .. math.floor(d) .. "m"
+local rc=0
+R.Heartbeat:Connect(function()
+    rc=rc+1
+    if rc<30 then return end
+    rc=0
+    for m,d in pairs(AE) do
+        if not m.Parent then rE(m)
         else
-            distLabel.Text = "Dist: N/A"
+            local hl,bb=d[1],d[2]
+            local br=(not hl or not hl.Parent)
+            if not br and bb then
+                local p=bb.Parent
+                if not p or not p:IsDescendantOf(m) then br=true end
+            end
+            if br then
+                rE(m)
+                pM(m)
+            end
         end
-    else
-        distLabel.Text = "Dist: N/A"
+    end
+    for i=#CP,1,-1 do
+        local t=CP[i]
+        if not t.aimPart or not t.aimPart.Parent then table.remove(CP,i) end
+    end
+    for i=#CB,1,-1 do
+        local t=CB[i]
+        if not t.aimPart or not t.aimPart.Parent then table.remove(CB,i) end
+    end
+    for i=#CM,1,-1 do
+        local t=CM[i]
+        if not t.aimPart or not t.aimPart.Parent then table.remove(CM,i) end
+    end
+    if B1 then
+        local tot=#CP+#CB+#CM
+        if tot==0 and not AR then rP() end
     end
 end)
 
-local collapsed = false
-local originalSize = UDim2.new(0, 210, 0, 355)
+-- ============================================================
+-- GUI
+-- ============================================================
 
-local collapseCircle = Instance.new("TextButton")
-collapseCircle.Size = UDim2.new(0, 38, 0, 38)
-collapseCircle.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-collapseCircle.BackgroundTransparency = 0
-collapseCircle.BorderSizePixel = 1
-collapseCircle.BorderColor3 = Color3.fromRGB(70, 70, 80)
-collapseCircle.Visible = false
-collapseCircle.Text = "−"
-collapseCircle.TextColor3 = Color3.fromRGB(255, 255, 255)
-collapseCircle.Font = Enum.Font.GothamBold
-collapseCircle.TextSize = 30
-collapseCircle.TextXAlignment = Enum.TextXAlignment.Center
-collapseCircle.TextYAlignment = Enum.TextYAlignment.Center
-collapseCircle.ZIndex = 10
-collapseCircle.Parent = screenGui
-Instance.new("UICorner", collapseCircle).CornerRadius = UDim.new(1, 0)
+local SG=Instance.new("ScreenGui")
+SG.Name="MEDW_Menu"
+SG.Parent=C
+SG.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+SG.ResetOnSpawn=false
 
-local shadowCircle = Instance.new("ImageLabel")
-shadowCircle.Size = UDim2.new(1, 10, 1, 10)
-shadowCircle.Position = UDim2.new(-0.05, 0, -0.05, 0)
-shadowCircle.BackgroundTransparency = 1
-shadowCircle.Image = "rbxassetid://1316045217"
-shadowCircle.ImageColor3 = Color3.new(0,0,0)
-shadowCircle.ImageTransparency = 0.5
-shadowCircle.ZIndex = 9
-shadowCircle.Parent = collapseCircle
+local BG=Color3.fromRGB(15,16,20)
+local HDR=Color3.fromRGB(18,19,24)
+local BORD=Color3.fromRGB(32,33,38)
+local TXT=Color3.fromRGB(232,233,238)
+local TXT2=Color3.fromRGB(138,140,150)
+local TXT3=Color3.fromRGB(80,82,90)
+local ACCENT=Color3.fromRGB(122,140,255)
+local TRACK_OFF=Color3.fromRGB(40,41,48)
 
-local function setCircleToButtonPosition()
-    local btnPos = collapseBtn.AbsolutePosition
-    if btnPos.X > 0 and btnPos.Y > 0 then
-        local offsetX = (38 - 30) / 2
-        local offsetY = (38 - 30) / 2
-        collapseCircle.Position = UDim2.new(0, btnPos.X - offsetX, 0, btnPos.Y - offsetY)
+local MF=Instance.new("Frame")
+MF.Size=UDim2.new(0,280,0,300)
+MF.Position=UDim2.new(0,40,0,40)
+MF.BackgroundColor3=BG
+MF.BorderSizePixel=0
+MF.ClipsDescendants=true
+MF.Active=true
+MF.Draggable=true
+MF.Parent=SG
+Instance.new("UICorner",MF).CornerRadius=UDim.new(0,10)
+local MFStroke=Instance.new("UIStroke")
+MFStroke.Color=BORD
+MFStroke.Thickness=1
+MFStroke.Parent=MF
+
+-- HEADER
+local HD=Instance.new("Frame")
+HD.Size=UDim2.new(1,0,0,36)
+HD.BackgroundColor3=HDR
+HD.BorderSizePixel=0
+HD.Parent=MF
+
+local MARK=Instance.new("Frame")
+MARK.Size=UDim2.new(0,20,0,20)
+MARK.Position=UDim2.new(0,12,0.5,-10)
+MARK.BackgroundColor3=ACCENT
+MARK.BorderSizePixel=0
+MARK.Parent=HD
+Instance.new("UICorner",MARK).CornerRadius=UDim.new(0,6)
+local MARKT=Instance.new("TextLabel")
+MARKT.Size=UDim2.new(1,0,1,0)
+MARKT.BackgroundTransparency=1
+MARKT.Text="M"
+MARKT.TextColor3=Color3.fromRGB(255,255,255)
+MARKT.Font=Enum.Font.GothamBold
+MARKT.TextSize=10
+MARKT.Parent=MARK
+
+local TITLE=Instance.new("TextLabel")
+TITLE.Size=UDim2.new(0,100,0,14)
+TITLE.Position=UDim2.new(0,38,0,6)
+TITLE.BackgroundTransparency=1
+TITLE.Text="MEDW"
+TITLE.TextColor3=TXT
+TITLE.Font=Enum.Font.GothamBold
+TITLE.TextSize=11
+TITLE.TextXAlignment=Enum.TextXAlignment.Left
+TITLE.TextYAlignment=Enum.TextYAlignment.Center
+TITLE.Parent=HD
+
+local SUB=Instance.new("TextLabel")
+SUB.Size=UDim2.new(0,100,0,12)
+SUB.Position=UDim2.new(0,38,0,18)
+SUB.BackgroundTransparency=1
+SUB.Text="esp + aimlock"
+SUB.TextColor3=TXT3
+SUB.Font=Enum.Font.Gotham
+SUB.TextSize=9
+SUB.TextXAlignment=Enum.TextXAlignment.Left
+SUB.TextYAlignment=Enum.TextYAlignment.Center
+SUB.Parent=HD
+
+local CBtn=Instance.new("TextButton")
+CBtn.Size=UDim2.new(0,22,0,22)
+CBtn.Position=UDim2.new(1,-32,0.5,-11)
+CBtn.BackgroundColor3=Color3.fromRGB(26,27,32)
+CBtn.BorderSizePixel=0
+CBtn.Text="−"
+CBtn.TextColor3=TXT2
+CBtn.Font=Enum.Font.GothamBold
+CBtn.TextSize=14
+CBtn.AutoButtonColor=false
+CBtn.Parent=HD
+Instance.new("UICorner",CBtn).CornerRadius=UDim.new(0,6)
+
+-- TAB BAR
+local TB=Instance.new("Frame")
+TB.Size=UDim2.new(1,0,0,28)
+TB.Position=UDim2.new(0,0,0,36)
+TB.BackgroundColor3=BG
+TB.BorderSizePixel=0
+TB.Parent=MF
+
+local TSEP=Instance.new("Frame")
+TSEP.Size=UDim2.new(1,0,0,1)
+TSEP.Position=UDim2.new(0,0,0,64)
+TSEP.BackgroundColor3=BORD
+TSEP.BorderSizePixel=0
+TSEP.Parent=MF
+
+local TUND=Instance.new("Frame")
+TUND.Size=UDim2.new(1/3,0,0,2)
+TUND.Position=UDim2.new(0,0,0,62)
+TUND.BackgroundColor3=ACCENT
+TUND.BorderSizePixel=0
+TUND.Parent=MF
+Instance.new("UICorner",TUND).CornerRadius=UDim.new(1,0)
+
+local tabNames={"Visuals","Aim","Config"}
+local tabBtns={}
+
+for i,name in ipairs(tabNames) do
+    local btn=Instance.new("TextButton")
+    btn.Size=UDim2.new(1/3,0,1,0)
+    btn.Position=UDim2.new((i-1)/3,0,0,0)
+    btn.BackgroundTransparency=1
+    btn.Text=name
+    btn.TextColor3=(i==1) and TXT or TXT3
+    btn.Font=Enum.Font.GothamBold
+    btn.TextSize=10
+    btn.AutoButtonColor=false
+    btn.Parent=TB
+    tabBtns[i]=btn
+end
+
+-- CONTENT
+local CA=Instance.new("Frame")
+CA.Size=UDim2.new(1,0,1,-124)
+CA.Position=UDim2.new(0,0,0,65)
+CA.BackgroundTransparency=1
+CA.Parent=MF
+
+local panes={}
+for i=1,3 do
+    local p=Instance.new("Frame")
+    p.Size=UDim2.new(1,0,1,0)
+    p.BackgroundTransparency=1
+    p.Visible=(i==1)
+    p.Parent=CA
+    panes[i]=p
+end
+
+local function switchTab(i)
+    for j,p in ipairs(panes) do p.Visible=(j==i) end
+    for j,b in ipairs(tabBtns) do
+        b.TextColor3=(j==i) and TXT or TXT3
+    end
+    TUND.Position=UDim2.new((i-1)/3,0,0,62)
+end
+
+for i,b in ipairs(tabBtns) do
+    b.MouseButton1Click:Connect(function() switchTab(i) end)
+end
+
+-- HELPERS
+local function mkRow(parent,y,label)
+    local row=Instance.new("Frame")
+    row.Size=UDim2.new(1,-24,0,28)
+    row.Position=UDim2.new(0,12,0,y)
+    row.BackgroundTransparency=1
+    row.Parent=parent
+    local lbl=Instance.new("TextLabel")
+    lbl.Size=UDim2.new(0.62,0,1,0)
+    lbl.BackgroundTransparency=1
+    lbl.Text=label
+    lbl.TextColor3=TXT2
+    lbl.Font=Enum.Font.Gotham
+    lbl.TextSize=11
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.TextYAlignment=Enum.TextYAlignment.Center
+    lbl.Parent=row
+    return row
+end
+
+local function mkToggle(parent,y,label,ini,cb)
+    local row=mkRow(parent,y,label)
+    local sw=Instance.new("TextButton")
+    sw.Size=UDim2.new(0,30,0,16)
+    sw.Position=UDim2.new(1,-30,0.5,-8)
+    sw.BackgroundColor3=ini and ACCENT or TRACK_OFF
+    sw.BorderSizePixel=0
+    sw.Text=""
+    sw.AutoButtonColor=false
+    sw.Parent=row
+    Instance.new("UICorner",sw).CornerRadius=UDim.new(1,0)
+    local kn=Instance.new("Frame")
+    kn.Size=UDim2.new(0,10,0,10)
+    kn.Position=ini and UDim2.new(1,-13,0.5,-5) or UDim2.new(0,3,0.5,-5)
+    kn.BackgroundColor3=Color3.fromRGB(255,255,255)
+    kn.BorderSizePixel=0
+    kn.Parent=sw
+    Instance.new("UICorner",kn).CornerRadius=UDim.new(1,0)
+    local st=ini
+    sw.MouseButton1Click:Connect(function()
+        st=not st
+        sw.BackgroundColor3=st and ACCENT or TRACK_OFF
+        kn.Position=st and UDim2.new(1,-13,0.5,-5) or UDim2.new(0,3,0.5,-5)
+        cb(st)
+    end)
+    return sw
+end
+
+local function mkSlider(parent,y,label,mn,mx,ini,cb,fillColor)
+    local row=mkRow(parent,y,label)
+    local track=Instance.new("Frame")
+    track.Size=UDim2.new(0,110,0,4)
+    track.Position=UDim2.new(1,-110,0.5,-2)
+    track.BackgroundColor3=TRACK_OFF
+    track.BorderSizePixel=0
+    track.Parent=row
+    Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
+    local rel=(ini-mn)/(mx-mn)
+    local fill=Instance.new("Frame")
+    fill.Size=UDim2.new(rel,0,1,0)
+    fill.BackgroundColor3=fillColor or ACCENT
+    fill.BorderSizePixel=0
+    fill.Parent=track
+    Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
+    local knob=Instance.new("TextButton")
+    knob.Size=UDim2.new(0,10,0,10)
+    knob.Position=UDim2.new(rel,-5,0.5,-5)
+    knob.BackgroundColor3=Color3.fromRGB(240,240,245)
+    knob.BorderSizePixel=0
+    knob.Text=""
+    knob.AutoButtonColor=false
+    knob.Parent=track
+    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+    local dg=false
+    local function upd(ip)
+        local rx=ip.X-track.AbsolutePosition.X
+        local w=track.AbsoluteSize.X
+        local v=math.clamp(rx/w,0,1)*(mx-mn)+mn
+        v=math.round(v*100)/100
+        local rv=(v-mn)/(mx-mn)
+        fill.Size=UDim2.new(rv,0,1,0)
+        knob.Position=UDim2.new(rv,-5,0.5,-5)
+        cb(v)
+    end
+    knob.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then dg=true upd(inp.Position) end
+    end)
+    U.InputChanged:Connect(function(inp)
+        if dg and inp.UserInputType==Enum.UserInputType.MouseMovement then upd(inp.Position) end
+    end)
+    U.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then dg=false end
+    end)
+    track.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then upd(inp.Position) dg=true end
+    end)
+    return fill,knob
+end
+
+-- VISUALS
+mkToggle(panes[1],8,"Player ESP",E1,function(v) E1=v rF() end)
+mkToggle(panes[1],38,"Bot ESP",E2,function(v) E2=v rF() end)
+mkToggle(panes[1],68,"Model ESP",E3,function(v) E3=v rF() if B1 then rA() end end)
+
+-- AIM
+mkToggle(panes[2],8,"Aimlock",AB,function(v) AB=v if v then rP() end end)
+mkToggle(panes[2],38,"Head Aim (P)",H1,function(v) H1=v rP() CT=nil end)
+mkToggle(panes[2],68,"Bot Aim",B1,function(v) B1=v if v then rA() else CB={} CM={} end CT=nil end)
+mkToggle(panes[2],98,"Head Aim (B)",H2,function(v) H2=v if B1 then rA() end CT=nil end)
+mkToggle(panes[2],128,"Predict",PR,function(v) PR=v end)
+
+-- CONFIG
+mkSlider(panes[3],8,"Fill",0,1,FT,function(v) FT=v uC() end)
+mkSlider(panes[3],38,"Outline",0,1,OT,function(v) OT=v uC() end)
+mkSlider(panes[3],68,"Smooth",0.05,0.95,SM,function(v) SM=v end)
+
+-- Highlight color
+do
+    local row=mkRow(panes[3],98,"Highlight")
+    local track=Instance.new("Frame")
+    track.Size=UDim2.new(0,110,0,4)
+    track.Position=UDim2.new(1,-110,0.5,-2)
+    track.BackgroundColor3=TRACK_OFF
+    track.BorderSizePixel=0
+    track.Parent=row
+    Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
+    local fill=Instance.new("Frame")
+    fill.Size=UDim2.new(0.66,0,1,0)
+    fill.BackgroundColor3=CC
+    fill.BorderSizePixel=0
+    fill.Parent=track
+    Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
+    local knob=Instance.new("TextButton")
+    knob.Size=UDim2.new(0,10,0,10)
+    knob.Position=UDim2.new(0.66,-5,0.5,-5)
+    knob.BackgroundColor3=Color3.fromRGB(240,240,245)
+    knob.BorderSizePixel=0
+    knob.Text=""
+    knob.AutoButtonColor=false
+    knob.Parent=track
+    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+    local dg=false
+    local function upd(ip)
+        local rx=ip.X-track.AbsolutePosition.X
+        local w=track.AbsoluteSize.X
+        local v=math.clamp(rx/w,0,1)
+        CC=Color3.fromHSV(v,1,1)
+        fill.BackgroundColor3=CC
+        fill.Size=UDim2.new(v,0,1,0)
+        knob.Position=UDim2.new(v,-5,0.5,-5)
+        uC()
+    end
+    knob.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then dg=true upd(inp.Position) end
+    end)
+    U.InputChanged:Connect(function(inp)
+        if dg and inp.UserInputType==Enum.UserInputType.MouseMovement then upd(inp.Position) end
+    end)
+    U.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then dg=false end
+    end)
+    track.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then upd(inp.Position) dg=true end
+    end)
+end
+
+-- FOOTER (крупный индикатор цели)
+local FT2=Instance.new("Frame")
+FT2.Size=UDim2.new(1,0,0,42)
+FT2.Position=UDim2.new(0,0,1,-42)
+FT2.BackgroundColor3=HDR
+FT2.BorderSizePixel=0
+FT2.Parent=MF
+
+local FSEP=Instance.new("Frame")
+FSEP.Size=UDim2.new(1,0,0,1)
+FSEP.Position=UDim2.new(0,0,0,0)
+FSEP.BackgroundColor3=BORD
+FSEP.BorderSizePixel=0
+FSEP.Parent=FT2
+
+local DOT=Instance.new("Frame")
+DOT.Size=UDim2.new(0,8,0,8)
+DOT.Position=UDim2.new(0,14,0.5,-4)
+DOT.BackgroundColor3=Color3.fromRGB(90,92,100)
+DOT.BorderSizePixel=0
+DOT.Parent=FT2
+Instance.new("UICorner",DOT).CornerRadius=UDim.new(1,0)
+
+local DLW=Instance.new("TextLabel")
+DLW.Size=UDim2.new(0,100,0,42)
+DLW.Position=UDim2.new(0,28,0,0)
+DLW.BackgroundTransparency=1
+DLW.Text="TARGET"
+DLW.TextColor3=TXT3
+DLW.Font=Enum.Font.GothamBold
+DLW.TextSize=10
+DLW.TextXAlignment=Enum.TextXAlignment.Left
+DLW.TextYAlignment=Enum.TextYAlignment.Center
+DLW.Parent=FT2
+
+local DL=Instance.new("TextLabel")
+DL.Size=UDim2.new(0,150,0,42)
+DL.Position=UDim2.new(1,-164,0,0)
+DL.BackgroundTransparency=1
+DL.Text="—"
+DL.TextColor3=TXT3
+DL.Font=Enum.Font.GothamBold
+DL.TextSize=20
+DL.TextXAlignment=Enum.TextXAlignment.Right
+DL.TextYAlignment=Enum.TextYAlignment.Center
+DL.Parent=FT2
+
+R.RenderStepped:Connect(function()
+    if AB and CT and CT.aimPart and CT.aimPart.Parent then
+        local rt=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if rt then
+            local d=(rt.Position-CT.aimPart.Position).Magnitude
+            DL.Text=math.floor(d).." m"
+            DL.TextColor3=ACCENT
+            DOT.BackgroundColor3=ACCENT
+        else
+            DL.Text="—"
+            DL.TextColor3=TXT3
+            DOT.BackgroundColor3=Color3.fromRGB(90,92,100)
+        end
+    else
+        DL.Text="—"
+        DL.TextColor3=TXT3
+        DOT.BackgroundColor3=Color3.fromRGB(90,92,100)
+    end
+end)
+
+-- COLLAPSE
+local CCB=Instance.new("TextButton")
+CCB.Size=UDim2.new(0,34,0,34)
+CCB.BackgroundColor3=BG
+CCB.BorderSizePixel=0
+CCB.Visible=false
+CCB.Text="−"
+CCB.TextColor3=TXT
+CCB.Font=Enum.Font.GothamBold
+CCB.TextSize=18
+CCB.AutoButtonColor=false
+CCB.ZIndex=10
+CCB.Parent=SG
+Instance.new("UICorner",CCB).CornerRadius=UDim.new(0,17)
+local CCBSTR=Instance.new("UIStroke")
+CCBSTR.Color=BORD
+CCBSTR.Thickness=1
+CCBSTR.Parent=CCB
+
+local function sCP()
+    local bp=CBtn.AbsolutePosition
+    if bp.X>0 and bp.Y>0 then
+        local ox=(34-22)/2
+        local oy=(34-22)/2
+        CCB.Position=UDim2.new(0,bp.X-ox,0,bp.Y-oy)
     end
 end
 
-collapseBtn.MouseButton1Click:Connect(function()
-    collapsed = true
-    setCircleToButtonPosition()
-    collapseCircle.Visible = true
-    mainFrame.Visible = false
+CBtn.MouseButton1Click:Connect(function()
+    sCP()
+    CCB.Visible=true
+    MF.Visible=false
 end)
 
-collapseCircle.MouseButton1Click:Connect(function()
-    collapsed = false
-    collapseCircle.Visible = false
-    mainFrame.Visible = true
-    mainFrame.Size = originalSize
+CCB.MouseButton1Click:Connect(function()
+    CCB.Visible=false
+    MF.Visible=true
 end)
 
-mainFrame:GetPropertyChangedSignal("Position"):Connect(function()
-    if collapseCircle.Visible then
-        setCircleToButtonPosition()
-    end
+MF:GetPropertyChangedSignal("Position"):Connect(function()
+    if CCB.Visible then sCP() end
 end)
 
-mainFrame.Visible = true
-collapseCircle.Visible = false
+MF.Visible=true
+CCB.Visible=false
 
-updateColorSlider(0)
-startTrackingESP()
-refreshESP()
+sT()
+rF()
