@@ -29,9 +29,13 @@ local PR=true
 
 local AE={}
 local PD={}
-local SQ={}
-local SQs={}
-local PQs=false
+
+-- ═══════════════════════════════════════════════════════
+-- FAST SPAWN PIPELINE
+-- ═══════════════════════════════════════════════════════
+local eQlist={}
+local eQset={}
+local eQscheduled=false
 
 local function gF(d)
     if d<=FN then return PN end
@@ -39,28 +43,6 @@ local function gF(d)
     local t=(d-FN)/(FF-FN)
     t=t*t
     return PN+(PF-PN)*t
-end
-
-local function eQ(o)
-    if SQs[o] then return end
-    SQs[o]=true
-    SQ[#SQ+1]=o
-    if PQs then return end
-    PQs=true
-    task.spawn(function()
-        while #SQ>0 do
-            local n=#SQ
-            local b=n>40 and 40 or n
-            for i=1,b do
-                local x=SQ[i]
-                SQs[x]=nil
-                if x and x.Parent then pM(x) end
-            end
-            for i=1,b do SQ[i]=nil end
-            if #SQ>0 then R.Heartbeat:Wait() end
-        end
-        PQs=false
-    end)
 end
 
 local DK={door=true,window=true,wall=true,floor=true,ceiling=true,prop=true,decoration=true,furniture=true,stairs=true,railing=true,pipe=true,vent=true,crate=true,barrel=true,container=true}
@@ -221,78 +203,14 @@ function pM(m)
     aE(m,t,r)
 end
 
-local FS=false
-local RQ=false
-
-local function rF()
-    if not E1 and not E2 and not E3 then cA() return end
-    if FS then RQ=true return end
-    FS=true
-    task.spawn(function()
-        for _,pl in ipairs(P:GetPlayers()) do
-            if pl~=LP and pl.Character then pM(pl.Character) end
-        end
-        local hs={}
-        local ms={}
-        for _,o in ipairs(W:GetDescendants()) do
-            if o:IsA("Humanoid") then hs[#hs+1]=o
-            elseif o:IsA("Model") then ms[#ms+1]=o end
-        end
-        local tot=#hs
-        local i=1
-        while i<=tot do
-            local s=math.min(i+39,tot)
-            for j=i,s do
-                local m=hs[j].Parent
-                if m and m:IsA("Model") then pM(m) end
-            end
-            i=s+1
-            if i<=tot then R.Heartbeat:Wait() end
-        end
-        tot=#ms
-        i=1
-        while i<=tot do
-            local s=math.min(i+49,tot)
-            for j=i,s do pM(ms[j]) end
-            i=s+1
-            if i<=tot then R.Heartbeat:Wait() end
-        end
-        FS=false
-        if RQ then RQ=false rF() end
-    end)
-end
-
-local function sT()
-    W.DescendantAdded:Connect(function(o)
-        if not (E1 or E2 or E3) and not B1 then return end
-        task.defer(function()
-            if o:IsA("Humanoid") or o:IsA("BasePart") then
-                local m=o.Parent
-                if m and m:IsA("Model") and AE[m] then
-                    rE(m)
-                    pM(m)
-                    return
-                end
-            end
-            if o:IsA("Model") then eQ(o)
-            elseif o:IsA("Humanoid") then
-                local m=o.Parent
-                if m and m:IsA("Model") then eQ(m) end
-            end
-        end)
-    end)
-    W.DescendantRemoving:Connect(function(o)
-        if o:IsA("Model") and AE[o] then rE(o)
-        elseif o:IsA("Humanoid") then
-            local m=o.Parent
-            if m and m:IsA("Model") and AE[m] then rE(m) end
-        end
-    end)
-end
-
+-- ═══════════════════════════════════════════════════════
+-- AIM CACHE (set-based for O(1))
+-- ═══════════════════════════════════════════════════════
 local CP={}
 local CB={}
+local CBset={}
 local CM={}
+local CMset={}
 local AR=false
 
 local function rP()
@@ -316,68 +234,74 @@ end
 
 local function aSB(m)
     if not B1 then return end
-    if not iSB(m) then return end
-    for _,t in ipairs(CB) do
-        if t.model==m then
-            if t.aimPart and t.aimPart.Parent then return end
-            if H2 then
-                local hd=m:FindFirstChild("Head")
-                if hd and hd:IsA("BasePart") then t.aimPart=hd
-                else t.aimPart=m:FindFirstChild("HumanoidRootPart") end
-            else
-                t.aimPart=m:FindFirstChild("HumanoidRootPart")
-            end
-            return
+    if not m or not m.Parent then return end
+    local e=CBset[m]
+    if e then
+        if e.aimPart and e.aimPart.Parent then return end
+        local root=m:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local ap=root
+        if H2 then
+            local hd=m:FindFirstChild("Head")
+            if hd and hd:IsA("BasePart") then ap=hd end
         end
+        e.aimPart=ap
+        return
     end
-    local rt=m:FindFirstChild("HumanoidRootPart")
-    if not rt then return end
-    local ap=rt
+    if not iSB(m) then return end
+    local root=m:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local ap=root
     if H2 then
         local hd=m:FindFirstChild("Head")
         if hd and hd:IsA("BasePart") then ap=hd end
     end
-    CB[#CB+1]={aimPart=ap,type="bot",ref=m,model=m}
+    local entry={aimPart=ap,type="bot",ref=m,model=m}
+    CB[#CB+1]=entry
+    CBset[m]=entry
 end
 
 local function rSB(m)
-    for i,t in ipairs(CB) do
-        if t.model==m then table.remove(CB,i) break end
-    end
+    local e=CBset[m]
+    if not e then return end
+    CBset[m]=nil
+    for i=1,#CB do if CB[i]==e then table.remove(CB,i) break end end
 end
 
 local function aCM(m)
     if not B1 or not E3 then return end
-    if not iCM(m) then return end
+    if not m or not m.Parent then return end
     if P:GetPlayerFromCharacter(m) then return end
-    for _,t in ipairs(CM) do
-        if t.model==m then
-            if t.aimPart and t.aimPart.Parent then return end
-            local rt=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-            if rt then
-                t.aimPart=rt
-                if H2 then
-                    local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
-                    if hd and hd:IsA("BasePart") then t.aimPart=hd end
-                end
-            end
-            return
+    local e=CMset[m]
+    if e then
+        if e.aimPart and e.aimPart.Parent then return end
+        local root=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+        if not root then return end
+        e.aimPart=root
+        if H2 then
+            local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
+            if hd and hd:IsA("BasePart") then e.aimPart=hd end
         end
+        return
     end
-    local rt=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-    if not rt then return end
-    local ap=rt
+    if not iCM(m) then return end
+    local root=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+    if not root then return end
+    local ap=root
     if H2 then
         local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
         if hd and hd:IsA("BasePart") then ap=hd end
     end
-    CM[#CM+1]={aimPart=ap,type="custom",ref=m,model=m}
+    local entry={aimPart=ap,type="custom",ref=m,model=m}
+    CM[#CM+1]=entry
+    CMset[m]=entry
 end
 
 local function rCM(m)
-    for i,t in ipairs(CM) do
-        if t.model==m then table.remove(CM,i) break end
-    end
+    local e=CMset[m]
+    if not e then return end
+    CMset[m]=nil
+    for i=1,#CM do if CM[i]==e then table.remove(CM,i) break end end
 end
 
 local function rA()
@@ -386,22 +310,25 @@ local function rA()
     task.spawn(function()
         rP()
         local nb={}
+        local nbs={}
         if B1 then
             local l=W:GetDescendants()
-            local b=80
+            local b=120
             for i=1,#l,b do
                 local s=math.min(i+b-1,#l)
                 for j=i,s do
                     local o=l[j]
                     if o:IsA("Model") and iSB(o) then
-                        local rt=o:FindFirstChild("HumanoidRootPart")
-                        if rt then
-                            local ap=rt
+                        local root=o:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local ap=root
                             if H2 then
                                 local hd=o:FindFirstChild("Head")
                                 if hd and hd:IsA("BasePart") then ap=hd end
                             end
-                            nb[#nb+1]={aimPart=ap,type="bot",ref=o,model=o}
+                            local entry={aimPart=ap,type="bot",ref=o,model=o}
+                            nb[#nb+1]=entry
+                            nbs[o]=entry
                         end
                     end
                 end
@@ -409,23 +336,27 @@ local function rA()
             end
         end
         CB=nb
+        CBset=nbs
         local nc={}
+        local ncs={}
         if B1 and E3 then
             local l=W:GetDescendants()
-            local b=80
+            local b=120
             for i=1,#l,b do
                 local s=math.min(i+b-1,#l)
                 for j=i,s do
                     local o=l[j]
                     if o:IsA("Model") and not P:GetPlayerFromCharacter(o) and iCM(o) then
-                        local rt=o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
-                        if rt then
-                            local ap=rt
+                        local root=o:FindFirstChild("HumanoidRootPart") or o.PrimaryPart
+                        if root then
+                            local ap=root
                             if H2 then
                                 local hd=o:FindFirstChild("Head") or o:FindFirstChild("head")
                                 if hd and hd:IsA("BasePart") then ap=hd end
                             end
-                            nc[#nc+1]={aimPart=ap,type="custom",ref=o,model=o}
+                            local entry={aimPart=ap,type="custom",ref=o,model=o}
+                            nc[#nc+1]=entry
+                            ncs[o]=entry
                         end
                     end
                 end
@@ -433,7 +364,67 @@ local function rA()
             end
         end
         CM=nc
+        CMset=ncs
         AR=false
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- UNIFIED HANDLER: ESP + AIM в одном проходе
+-- ═══════════════════════════════════════════════════════
+local function handleNew(o)
+    if not o or not o.Parent then return end
+    local m
+    if o:IsA("Model") then
+        m=o
+    elseif o:IsA("Humanoid") or o:IsA("BasePart") then
+        m=o.Parent
+        if not m or not m:IsA("Model") then return end
+    else
+        return
+    end
+    if E1 or E2 or E3 then pM(m) end
+    if B1 then aSB(m) aCM(m) end
+end
+
+local function eQ(o)
+    if eQset[o] then return end
+    eQset[o]=true
+    eQlist[#eQlist+1]=o
+    if eQscheduled then return end
+    eQscheduled=true
+    task.defer(function()
+        eQscheduled=false
+        local items=eQlist
+        eQlist={}
+        eQset={}
+        for i=1,#items do
+            handleNew(items[i])
+        end
+    end)
+end
+
+local function sT()
+    W.DescendantAdded:Connect(function(o)
+        if not (E1 or E2 or E3 or B1) then return end
+        local cn=o.ClassName
+        if cn=="Model" or cn=="Humanoid" or cn=="BasePart" or cn=="MeshPart" then
+            eQ(o)
+        end
+    end)
+    W.DescendantRemoving:Connect(function(o)
+        if o:IsA("Model") then
+            if AE[o] then rE(o) end
+            rSB(o)
+            rCM(o)
+        elseif o:IsA("Humanoid") then
+            local m=o.Parent
+            if m and m:IsA("Model") then
+                if AE[m] then rE(m) end
+                rSB(m)
+                rCM(m)
+            end
+        end
     end)
 end
 
@@ -441,44 +432,106 @@ local function sA()
     rP()
     P.PlayerAdded:Connect(function(pl)
         rP()
-        pl.CharacterAdded:Connect(rP)
+        pl.CharacterAdded:Connect(function(ch)
+            rP()
+            -- Instant process on character spawn
+            task.defer(function()
+                if ch and ch.Parent then
+                    if E1 or E2 or E3 then pM(ch) end
+                end
+            end)
+        end)
         pl.CharacterRemoving:Connect(rP)
     end)
     P.PlayerRemoving:Connect(rP)
     for _,pl in ipairs(P:GetPlayers()) do
-        pl.CharacterAdded:Connect(rP)
+        pl.CharacterAdded:Connect(function(ch)
+            rP()
+            task.defer(function()
+                if ch and ch.Parent then
+                    if E1 or E2 or E3 then pM(ch) end
+                end
+            end)
+        end)
         pl.CharacterRemoving:Connect(rP)
     end
-    W.DescendantAdded:Connect(function(o)
-        if not B1 then return end
-        task.defer(function()
-            if o:IsA("Model") then
-                aSB(o)
-                aCM(o)
-            elseif o:IsA("Humanoid") then
-                local m=o.Parent
-                if m and m:IsA("Model") then
-                    aSB(m)
-                    aCM(m)
-                end
-            end
-        end)
-    end)
-    W.DescendantRemoving:Connect(function(o)
-        if o:IsA("Model") then
-            rSB(o)
-            rCM(o)
-        elseif o:IsA("Humanoid") then
-            local m=o.Parent
-            if m and m:IsA("Model") then
-                rSB(m)
-                rCM(m)
-            end
-        end
-    end)
 end
 sA()
 
+-- ═══════════════════════════════════════════════════════
+-- CATCH-UP SCAN (lightweight, every 0.35s)
+-- ═══════════════════════════════════════════════════════
+local catchT=0
+R.Heartbeat:Connect(function(dt)
+    catchT=catchT+dt
+    if catchT<0.35 then return end
+    catchT=0
+    if not (E1 or E2 or E3 or B1) then return end
+    -- Scan Workspace direct children only (fast)
+    local ch=W:GetChildren()
+    for i=1,#ch do
+        local c=ch[i]
+        if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then
+            if (E1 or E2 or E3) and not AE[c] and not PD[c] then
+                pM(c)
+            end
+            if B1 then
+                if not CBset[c] and not CMset[c] and not P:GetPlayerFromCharacter(c) then
+                    aSB(c)
+                    aCM(c)
+                end
+            end
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- ESP REFRESH (batched)
+-- ═══════════════════════════════════════════════════════
+local FS=false
+local RQ=false
+
+local function rF()
+    if not E1 and not E2 and not E3 then cA() return end
+    if FS then RQ=true return end
+    FS=true
+    task.spawn(function()
+        for _,pl in ipairs(P:GetPlayers()) do
+            if pl~=LP and pl.Character then pM(pl.Character) end
+        end
+        local hs={}
+        local ms={}
+        for _,o in ipairs(W:GetDescendants()) do
+            if o:IsA("Humanoid") then hs[#hs+1]=o
+            elseif o:IsA("Model") then ms[#ms+1]=o end
+        end
+        local tot=#hs
+        local i=1
+        while i<=tot do
+            local s=math.min(i+59,tot)
+            for j=i,s do
+                local m=hs[j].Parent
+                if m and m:IsA("Model") then pM(m) end
+            end
+            i=s+1
+            if i<=tot then R.Heartbeat:Wait() end
+        end
+        tot=#ms
+        i=1
+        while i<=tot do
+            local s=math.min(i+79,tot)
+            for j=i,s do pM(ms[j]) end
+            i=s+1
+            if i<=tot then R.Heartbeat:Wait() end
+        end
+        FS=false
+        if RQ then RQ=false rF() end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- AIM TARGETING
+-- ═══════════════════════════════════════════════════════
 local function gCT()
     local cl=nil
     local bs=math.huge
@@ -494,16 +547,14 @@ local function gCT()
         else tg[#tg+1]=t end
     end
     if B1 then
-        for i=#CB,1,-1 do
-            local t=CB[i]
-            if not t.aimPart or not t.aimPart.Parent then table.remove(CB,i)
-            else tg[#tg+1]=t end
+        for m,e in pairs(CBset) do
+            if not e.aimPart or not e.aimPart.Parent then rSB(m)
+            else tg[#tg+1]=e end
         end
         if E3 then
-            for i=#CM,1,-1 do
-                local t=CM[i]
-                if not t.aimPart or not t.aimPart.Parent then table.remove(CM,i)
-                else tg[#tg+1]=t end
+            for m,e in pairs(CMset) do
+                if not e.aimPart or not e.aimPart.Parent then rCM(m)
+                else tg[#tg+1]=e end
             end
         end
     end
@@ -555,10 +606,13 @@ R.RenderStepped:Connect(function()
     end
 end)
 
+-- ═══════════════════════════════════════════════════════
+-- REPAIR CYCLE (every ~0.4s)
+-- ═══════════════════════════════════════════════════════
 local rc=0
 R.Heartbeat:Connect(function()
     rc=rc+1
-    if rc<30 then return end
+    if rc<24 then return end
     rc=0
     for m,d in pairs(AE) do
         if not m.Parent then rE(m)
@@ -569,33 +623,42 @@ R.Heartbeat:Connect(function()
                 local p=bb.Parent
                 if not p or not p:IsDescendantOf(m) then br=true end
             end
-            if br then
-                rE(m)
-                pM(m)
-            end
+            if br then rE(m) pM(m) end
         end
     end
-    for i=#CP,1,-1 do
-        local t=CP[i]
-        if not t.aimPart or not t.aimPart.Parent then table.remove(CP,i) end
+    for m,e in pairs(CBset) do
+        if not m.Parent then rSB(m)
+        elseif not e.aimPart or not e.aimPart.Parent then
+            local root=m:FindFirstChild("HumanoidRootPart")
+            if root then
+                local ap=root
+                if H2 then
+                    local hd=m:FindFirstChild("Head")
+                    if hd and hd:IsA("BasePart") then ap=hd end
+                end
+                e.aimPart=ap
+            else rSB(m) end
+        end
     end
-    for i=#CB,1,-1 do
-        local t=CB[i]
-        if not t.aimPart or not t.aimPart.Parent then table.remove(CB,i) end
-    end
-    for i=#CM,1,-1 do
-        local t=CM[i]
-        if not t.aimPart or not t.aimPart.Parent then table.remove(CM,i) end
-    end
-    if B1 then
-        local tot=#CP+#CB+#CM
-        if tot==0 and not AR then rP() end
+    for m,e in pairs(CMset) do
+        if not m.Parent then rCM(m)
+        elseif not e.aimPart or not e.aimPart.Parent then
+            local root=m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            if root then
+                local ap=root
+                if H2 then
+                    local hd=m:FindFirstChild("Head") or m:FindFirstChild("head")
+                    if hd and hd:IsA("BasePart") then ap=hd end
+                end
+                e.aimPart=ap
+            else rCM(m) end
+        end
     end
 end)
 
--- ============================================================
--- GUI
--- ============================================================
+-- ═══════════════════════════════════════════════════════
+-- GUI (unchanged)
+-- ═══════════════════════════════════════════════════════
 
 local SG=Instance.new("ScreenGui")
 SG.Name="MEDW_Menu"
@@ -627,7 +690,6 @@ MFStroke.Color=BORD
 MFStroke.Thickness=1
 MFStroke.Parent=MF
 
--- HEADER
 local HD=Instance.new("Frame")
 HD.Size=UDim2.new(1,0,0,36)
 HD.BackgroundColor3=HDR
@@ -687,7 +749,6 @@ CBtn.AutoButtonColor=false
 CBtn.Parent=HD
 Instance.new("UICorner",CBtn).CornerRadius=UDim.new(0,6)
 
--- TAB BAR
 local TB=Instance.new("Frame")
 TB.Size=UDim2.new(1,0,0,28)
 TB.Position=UDim2.new(0,0,0,36)
@@ -727,7 +788,6 @@ for i,name in ipairs(tabNames) do
     tabBtns[i]=btn
 end
 
--- CONTENT
 local CA=Instance.new("Frame")
 CA.Size=UDim2.new(1,0,1,-124)
 CA.Position=UDim2.new(0,0,0,65)
@@ -756,7 +816,6 @@ for i,b in ipairs(tabBtns) do
     b.MouseButton1Click:Connect(function() switchTab(i) end)
 end
 
--- HELPERS
 local function mkRow(parent,y,label)
     local row=Instance.new("Frame")
     row.Size=UDim2.new(1,-24,0,28)
@@ -855,24 +914,20 @@ local function mkSlider(parent,y,label,mn,mx,ini,cb,fillColor)
     return fill,knob
 end
 
--- VISUALS
 mkToggle(panes[1],8,"Player ESP",E1,function(v) E1=v rF() end)
 mkToggle(panes[1],38,"Bot ESP",E2,function(v) E2=v rF() end)
 mkToggle(panes[1],68,"Model ESP",E3,function(v) E3=v rF() if B1 then rA() end end)
 
--- AIM
 mkToggle(panes[2],8,"Aimlock",AB,function(v) AB=v if v then rP() end end)
 mkToggle(panes[2],38,"Head Aim (P)",H1,function(v) H1=v rP() CT=nil end)
-mkToggle(panes[2],68,"Bot Aim",B1,function(v) B1=v if v then rA() else CB={} CM={} end CT=nil end)
+mkToggle(panes[2],68,"Bot Aim",B1,function(v) B1=v if v then rA() else CB={} CBset={} CM={} CMset={} end CT=nil end)
 mkToggle(panes[2],98,"Head Aim (B)",H2,function(v) H2=v if B1 then rA() end CT=nil end)
 mkToggle(panes[2],128,"Predict",PR,function(v) PR=v end)
 
--- CONFIG
 mkSlider(panes[3],8,"Fill",0,1,FT,function(v) FT=v uC() end)
 mkSlider(panes[3],38,"Outline",0,1,OT,function(v) OT=v uC() end)
 mkSlider(panes[3],68,"Smooth",0.05,0.95,SM,function(v) SM=v end)
 
--- Highlight color
 do
     local row=mkRow(panes[3],98,"Highlight")
     local track=Instance.new("Frame")
@@ -922,7 +977,6 @@ do
     end)
 end
 
--- FOOTER (крупный индикатор цели)
 local FT2=Instance.new("Frame")
 FT2.Size=UDim2.new(1,0,0,42)
 FT2.Position=UDim2.new(0,0,1,-42)
@@ -989,7 +1043,6 @@ R.RenderStepped:Connect(function()
     end
 end)
 
--- COLLAPSE
 local CCB=Instance.new("TextButton")
 CCB.Size=UDim2.new(0,34,0,34)
 CCB.BackgroundColor3=BG
